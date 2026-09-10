@@ -10,9 +10,9 @@ import {
   initializeProject,
   ProjectError,
   RuntimeError
-} from "./index.js";
-import { runMcpServer } from "./mcp.js";
-import type { RuntimeRequest } from "./index.js";
+} from "./index.ts";
+import { runMcpServer } from "./mcp.ts";
+import type { RuntimeRequest } from "./index.ts";
 
 export interface CliIO {
   readonly cwd?: string;

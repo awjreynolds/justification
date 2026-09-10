@@ -1,8 +1,8 @@
-import { discoverProjects } from "./index.js";
-import { executeOperation } from "./runtime.js";
-import type { ProjectDescriptor } from "./index.js";
-import type { RuntimeRequest } from "./runtime.js";
-import { operationRequestSchemas, type OperationName } from "./requests.js";
+import { discoverProjects } from "./index.ts";
+import { executeOperation } from "./runtime.ts";
+import type { ProjectDescriptor } from "./index.ts";
+import type { RuntimeRequest } from "./runtime.ts";
+import { operationRequestSchemas, type OperationName } from "./requests.ts";
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";

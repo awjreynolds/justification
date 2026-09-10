@@ -49,6 +49,49 @@ to `none`; this job has no need to write repository contents, checks, releases,
 packages or other resources. Ubuntu is the only platform covered by this
 baseline; no cross-platform behavior is claimed.
 
-This note records release availability and documentation compatibility, not a
-completed hosted GitHub run. The parent task should inspect the first run after
-publishing the workflow and record any runner-specific failure separately.
+This note records release availability and documentation compatibility, plus
+the first hosted runner result and its clean-checkout correction.
+
+## Hosted typecheck correction
+
+The first hosted run, [34535024675](https://github.com/awjreynolds/justification/actions/runs/34535024675),
+ran on commit `84325838dced89fb23bf996432c631cf6c088494` and failed during
+`npm run typecheck`, before the build step could create `dist/`. The fresh
+checkout therefore exposed three related diagnostics:
+
+```text
+test/mcp.test.ts(12,24): error TS2307: Cannot find module '../dist/cli.js' or its corresponding type declarations.
+test/mcp.test.ts(252,25): error TS7006: Parameter 'chunk' implicitly has an 'any' type.
+test/mcp.test.ts(253,25): error TS7006: Parameter 'chunk' implicitly has an 'any' type.
+```
+
+The failure was reproduced locally from a clean archive of that commit. After
+confirming `dist/` was absent, `npm ci` completed and this command exited `1`
+with the same three diagnostics:
+
+```sh
+git archive 84325838dced89fb23bf996432c631cf6c088494 | tar -x -C "$tmp"
+test ! -e "$tmp/dist"
+(cd "$tmp" && npm ci)
+(cd "$tmp" && PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH npm run typecheck)
+```
+
+The direct `runCli` API assertion in `test/mcp.test.ts` now imports from
+`src/cli.ts`, and the CLI source import graph uses `.ts` extensions so Node's
+test loader can resolve it before compilation. TypeScript rewrites those
+extensions to `.js` in `dist/`; all process-level MCP and CLI tests continue to
+start the actual built `dist/cli.js` executable.
+
+The correction was then verified from a clean archive of `48cfca5` with the
+three changed files applied and no pre-existing `dist/` directory. Under the
+pinned Node `24.21.0` toolchain, the exact sequence below exited `0`:
+
+```sh
+test ! -e "$tmp/dist"
+(cd "$tmp" && PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH npm ci)
+(cd "$tmp" && PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH npm run typecheck)
+(cd "$tmp" && PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH npm test)
+```
+
+Typecheck passed, the build created `dist/` as part of `npm test`, and all 54
+tests passed, including the process-level MCP/CLI tests.

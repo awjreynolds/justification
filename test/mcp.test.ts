@@ -9,7 +9,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
-import { runCli } from "../dist/cli.js";
+import { runCli } from "../src/cli.ts";
 import { initializeProject } from "../src/index.ts";
 
 const execFile = promisify(execFileCallback);
