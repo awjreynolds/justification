@@ -308,3 +308,9 @@ export async function discoverProjects(roots: readonly string[]): Promise<Projec
 
   return projects;
 }
+
+export { executeOperation, RuntimeError } from "./runtime.ts";
+export type {
+  RuntimeRequest,
+  RuntimeResponse
+} from "./runtime.ts";
