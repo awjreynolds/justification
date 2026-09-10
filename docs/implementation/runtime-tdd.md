@@ -91,7 +91,77 @@ PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
 ```
 
 The currently implemented runtime operations are `knowledge_bases`,
-`create_kb`, and `export`. The remaining operation discriminants are typed and
-documented for transport integration but still fail as unsupported until their
-own red test is run. This keeps later work aligned with the one-behavior
-red/green sequence in `docs/planning/tdd-plan.md`.
+`create_kb`, `capture_source`, `record`, `justify`, `why`, and `export`. The
+remaining operation discriminants are typed and documented for transport
+integration but still fail as unsupported until their own red test is run.
+This keeps later work aligned with the one-behavior red/green sequence in
+`docs/planning/tdd-plan.md`.
+
+## Primary ADR chain: GREEN
+
+The next coherent public behavior test now covers the complete intended
+scenario: project and child KB setup, real file capture, an accepted shared
+constraint, a locally justified claim, three options, a decision with an
+atomic original basis, an ADR artifact, `why` ancestry/provenance, and an
+independently parsed readable export. It deliberately runs through the public
+dispatcher and uses real temporary files.
+
+The exact RED command was:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm test -- --test-name-pattern='complete ADR evidence chain'
+```
+
+Result: the existing bootstrap, export, and regression tests passed (`30
+passed`), while the new chain failed at its first missing behavior with:
+
+```text
+Error [RuntimeError]: unsupported runtime operation: capture_source
+code: INVALID_REQUEST
+```
+
+The minimum GREEN implementation adds only the operations exercised by this
+chain. `capture_source` resolves and reads a project-relative file through the
+file provider, stores an immutable observation with the exact-byte SHA-256
+revision, creates linked source/evidence nodes for present content, and records
+later changes. `record` validates scope and node semantics, creates decision or
+artifact basis groups atomically with the node, and records the revision of
+that basis. `justify` adds a current support alternative with cycle checks.
+`why` evaluates support at an explicit time, returns original basis separately
+from current alternatives, walks upstream ancestry, and returns retained source
+provenance. The readable exporter renders the IDs, rationales, premises,
+observation revision and observed text into generated concept documents.
+
+The exact GREEN command was:
+
+```text
+npm test -- --test-name-pattern='complete ADR evidence chain'
+```
+
+Result: the focused chain and the selected existing tests passed (`10 passed,
+0 failed`). The complete build and suite then passed (`33 passed, 0 failed`).
+
+## Support-cycle review correction: GREEN
+
+The first review of the ADR slice found that cycle detection traversed the
+proposed edge in the wrong direction. A public regression created `A` supported
+by `B`, then attempted to add `B` supported by `A`, and also checked that the
+rejected attempt did not advance the durable revision.
+
+The exact RED command was:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  node --test test/runtime.test.ts \
+  --test-name-pattern='rejects a justification that would close a support cycle'
+```
+
+Result: the new test failed with `Missing expected rejection`; the attempted
+cycle was incorrectly committed.
+
+The minimum fix makes the check traverse each proposed premise toward the
+conclusion through the existing support graph before committing. The exact
+GREEN run passed the focused regression (`11 passed, 0 failed` including the
+selected existing runtime tests), and the complete suite passed (`34 passed,
+0 failed`).

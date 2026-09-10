@@ -64,7 +64,44 @@ function bodyFor(node: NodeRecord, state: ProjectState): string {
     if (source) lines.push(`Source: [${source.locator}](../${source.locator})`);
   }
   if (node.fields?.observationId) lines.push(`Retained observation: ${node.fields.observationId}`);
+  const reasoning = reasoningFor(node, state);
+  if (reasoning.length > 0) lines.push("", "## Justification", ...reasoning);
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function reasoningFor(node: NodeRecord, state: ProjectState): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const visit = (nodeId: string, depth: number): void => {
+    if (seen.has(nodeId)) return;
+    seen.add(nodeId);
+    const candidate = state.nodes[nodeId];
+    if (candidate === undefined) return;
+    const prefix = "  ".repeat(Math.min(depth, 8));
+    lines.push(`${prefix}- ${candidate.kind} ${candidate.id}: ${candidate.title}`);
+    const justifications = Object.values(state.justifications)
+      .filter((justification) => justification.conclusion === nodeId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+    for (const justification of justifications) {
+      lines.push(`${prefix}  Basis ${justification.id}: ${justification.rationale}`);
+      for (const group of justification.groups) {
+        lines.push(`${prefix}  Premises: ${group.premises.join(", ")}`);
+        for (const premise of group.premises) visit(premise, depth + 1);
+      }
+    }
+    if (candidate.kind === "evidence" && typeof candidate.fields?.sourceId === "string") {
+      const source = state.sources[candidate.fields.sourceId];
+      const observationId = candidate.fields.observationId;
+      const observation = typeof observationId === "string" ? state.observations[observationId] : undefined;
+      if (source !== undefined) lines.push(`${prefix}  Source ${source.id}: ${source.locator}`);
+      if (observation !== undefined) {
+        lines.push(`${prefix}  Observation ${observation.id}: ${observation.providerRevision ?? "unknown revision"}`);
+        if (observation.observedText !== undefined) lines.push(`${prefix}  Observed text: ${observation.observedText.trimEnd()}`);
+      }
+    }
+  };
+  visit(node.id, 0);
+  return lines;
 }
 
 export function projectDocuments(state: ProjectState, generatedAt = new Date().toISOString(), kbFilter?: string): ProjectionDocument[] {

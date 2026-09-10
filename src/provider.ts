@@ -149,11 +149,11 @@ export class FileKnowledgeProvider implements KnowledgeProvider {
     }
     const digest = sha256(text);
     const bytesDigest = sha256(bytes);
-    const revision = await this.version(resolved);
+    const revision = `sha256:${bytesDigest}`;
     return {
       status: "present",
       locator: resolved.locator,
-      providerRevision: revision ?? bytesDigest,
+      providerRevision: revision,
       digest,
       bytesDigest,
       text,

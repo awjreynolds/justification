@@ -53,3 +53,36 @@ OKF export writes the current readable projection under `kb/` and reports that
 the projection does not contain the complete native revision history. Native
 history remains the numbered, integrity-chained snapshots in
 `justification-history/`.
+
+For the primary ADR chain, mutation results use these concrete data members:
+
+```json
+{
+  "capture_source": {
+    "source": { "id": "source-id", "nodeId": "source-node-id", "locator": "constraints.md" },
+    "observation": { "id": "observation-id", "observedText": "...", "providerRevision": "...", "digest": "..." },
+    "evidence": { "id": "evidence-id", "sourceId": "source-id", "observationId": "observation-id" }
+  },
+  "record": { "node": { "id": "node-id", "kind": "claim" }, "justification": null },
+  "justify": { "justification": { "id": "justification-id", "conclusion": "node-id", "groups": [{ "premises": ["evidence-id"] }] } },
+  "why": {
+    "node": { "id": "node-id" },
+    "originalBasis": { "justification": { "id": "basis-id", "recordedAtRevision": 7 } },
+    "upstream": [{ "id": "evidence-id" }, { "id": "source-node-id" }],
+    "provenance": [{ "sourceId": "source-id", "observationId": "observation-id", "observedText": "..." }]
+  }
+}
+```
+
+The `record` result includes the atomic basis justification for a decision or
+artifact. Its node fields include `originalBasisJustificationId` and
+`recordedAtRevision`; later `justify` calls appear as current alternatives in
+`why` and do not replace this acceptance basis. Exported concept documents
+render the original basis, readable ID links, rationale and retained source
+locator in the body as well as preserving IDs in the `justification` profile.
+
+The initial file provider hashes the exact captured UTF-8 bytes with SHA-256.
+An observation exposes that digest as `observedBytesDigest`, uses the same
+content address as its `digest` for text, and records
+`providerRevision: "sha256:<hex>"`. Filesystem mtime/size may be used as a
+transient pre-read stability check but never replace this durable revision.

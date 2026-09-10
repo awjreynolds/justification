@@ -286,3 +286,202 @@ function canonicalJsonForTest(value: unknown): string {
   };
   return JSON.stringify(canonical(value));
 }
+
+test("records and explains a complete ADR evidence chain with original basis and readable export", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-adr-chain-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, { op: "create_kb", id: "adr", title: "Architecture decision", actor: "human:author" });
+
+    const sourceLocator = "constraints.md";
+    const sourceText = "Run 2026-09-10 with network access blocked: PASS\nConstraint C1: the service must run without network access.\n";
+    const expectedBytesDigest = createHash("sha256").update(sourceText, "utf8").digest("hex");
+    await writeFile(join(root, sourceLocator), sourceText, "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "process:capture"
+    });
+    const capturedData = captured.data as {
+      source: { id: string; nodeId: string; locator: string };
+      observation: { id: string; observedText: string; observedBytesDigest: string; providerRevision: string; digest: string };
+      evidence: { id: string; sourceId: string; observationId: string };
+    };
+    assert.equal(capturedData.source.locator, sourceLocator);
+    assert.equal(capturedData.observation.observedText, sourceText);
+    assert.equal(capturedData.observation.observedBytesDigest, expectedBytesDigest);
+    assert.equal(capturedData.observation.providerRevision, `sha256:${expectedBytesDigest}`);
+    assert.equal(capturedData.observation.digest, expectedBytesDigest);
+    assert.equal(capturedData.evidence.sourceId, capturedData.source.id);
+    assert.equal(capturedData.evidence.observationId, capturedData.observation.id);
+
+    const constraint = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "requirement",
+      title: "Offline operation is required",
+      body: "The service must run without network access.",
+      fields: { accepted: true, propositionKey: "offline-operation" },
+      actor: "human:author"
+    });
+    const constraintId = (constraint.data as { node: { id: string } }).node.id;
+
+    const claim = await executeOperation(root, {
+      op: "record",
+      kb: "adr",
+      kind: "claim",
+      title: "The selected design satisfies the offline constraint",
+      body: "The selected design can run without network access.",
+      actor: "human:author"
+    });
+    const claimId = (claim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "adr",
+      conclusion: claimId,
+      groups: [[capturedData.evidence.id, constraintId]],
+      rationale: "The retained source observation states the constraint and the requirement is accepted for this ADR.",
+      actor: "human:author"
+    });
+
+    const optionIds: string[] = [];
+    for (const [title, body] of [
+      ["Run locally", "Run the service entirely on the local host."],
+      ["Use a hosted service", "Use a hosted dependency for execution."],
+      ["Defer the decision", "Defer the architecture decision." ]
+    ] as const) {
+      const option = await executeOperation(root, {
+        op: "record",
+        kb: "adr",
+        kind: "option",
+        title,
+        body,
+        actor: "human:author"
+      });
+      optionIds.push((option.data as { node: { id: string } }).node.id);
+    }
+
+    const decision = await executeOperation(root, {
+      op: "record",
+      kb: "adr",
+      kind: "decision",
+      title: "Choose local execution",
+      body: "We choose local execution for this ADR.",
+      basis: [claimId],
+      fields: {
+        consideredOptions: optionIds,
+        selectedOption: optionIds[0],
+        rationale: "Local execution satisfies the retained offline constraint."
+      },
+      actor: "human:author"
+    });
+    const decisionData = decision.data as { node: { id: string; fields?: { recordedAtRevision?: number; originalBasisJustificationId?: string } }; justification?: { id: string } };
+    const decisionId = decisionData.node.id;
+    assert.equal(decisionData.node.fields?.recordedAtRevision, decision.revision);
+    assert.match(decisionData.node.fields?.originalBasisJustificationId ?? "", /.+/);
+
+    const artifactLocator = "adr.md";
+    const artifactText = "# ADR: local execution\n\nDecision: choose local execution.\n";
+    await writeFile(join(root, artifactLocator), artifactText, "utf8");
+    const artifact = await executeOperation(root, {
+      op: "record",
+      kb: "adr",
+      kind: "artifact",
+      title: "Architecture decision record",
+      body: artifactText,
+      basis: [decisionId],
+      fields: { locator: artifactLocator },
+      actor: "human:author"
+    });
+    const artifactData = artifact.data as { node: { id: string; fields?: { recordedAtRevision?: number; originalBasisJustificationId?: string } }; justification?: { id: string } };
+    assert.equal(artifactData.node.fields?.recordedAtRevision, artifact.revision);
+    assert.match(artifactData.node.fields?.originalBasisJustificationId ?? "", /.+/);
+
+    const explained = await executeOperation(root, { op: "why", nodeId: artifactData.node.id, kb: "adr", evaluationTime: "2026-09-10T00:00:00Z" });
+    const explanation = explained.data as {
+      node: { id: string };
+      originalBasis: { justification: { conclusion: string; groups: Array<{ premises: string[] }> } };
+      upstream: Array<{ id: string }>;
+      provenance: Array<{ sourceId: string; observationId: string; observedText: string; providerRevision: string }>;
+    };
+    const upstreamIds = new Set(explanation.upstream.map((node) => node.id));
+    assert.equal(explanation.node.id, artifactData.node.id);
+    assert.equal(explanation.originalBasis.justification.conclusion, artifactData.node.id);
+    assert.deepEqual(explanation.originalBasis.justification.groups[0]?.premises, [decisionId]);
+    for (const expectedId of [decisionId, claimId, constraintId, capturedData.evidence.id, capturedData.source.nodeId]) assert.equal(upstreamIds.has(expectedId), true, `missing ancestry ${expectedId}`);
+    assert.deepEqual(explanation.provenance, [{
+      sourceId: capturedData.source.id,
+      observationId: capturedData.observation.id,
+      observedText: sourceText,
+      providerRevision: capturedData.observation.providerRevision
+    }]);
+
+    const exported = await executeOperation(root, { op: "export", kb: "adr" });
+    const exportData = exported.data as { files: string[]; historyIncluded: boolean };
+    const artifactPath = `kb/adr/${artifactData.node.id}.md`;
+    assert.equal(exportData.historyIncluded, false);
+    assert.equal(exportData.files.includes(artifactPath), true);
+    const artifactDocument = await readFile(join(root, artifactPath), "utf8");
+    const closing = artifactDocument.indexOf("\n---\n", 4);
+    assert.ok(closing > 4);
+    const frontmatter = parseDocument(artifactDocument.slice(4, closing)).toJSON() as { type?: string; justification?: { id?: string; fields?: { basis?: string[] } } };
+    assert.equal(frontmatter.type, "artifact");
+    assert.equal(frontmatter.justification?.id, artifactData.node.id);
+    assert.deepEqual(frontmatter.justification?.fields?.basis, [decisionId]);
+    for (const expectedText of [decisionId, claimId, constraintId, capturedData.evidence.id, capturedData.source.id, sourceLocator, "Local execution satisfies the retained offline constraint."]) assert.equal(artifactDocument.includes(expectedText), true, `missing exported provenance ${expectedText}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a justification that would close a support cycle", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-cycle-"));
+  try {
+    await initializeProject(root);
+    const first = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "First claim",
+      body: "The first claim is supported by the second claim.",
+      actor: "human:test"
+    });
+    const firstId = (first.data as { node: { id: string } }).node.id;
+    const second = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Second claim",
+      body: "The second claim is supported by the first claim.",
+      actor: "human:test"
+    });
+    const secondId = (second.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      conclusion: firstId,
+      groups: [[secondId]],
+      rationale: "The second claim supports the first claim.",
+      actor: "human:test"
+    });
+    const beforeRejectedAttempt = await executeOperation(root, { op: "knowledge_bases" });
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "justify",
+        conclusion: secondId,
+        groups: [[firstId]],
+        rationale: "The first claim supports the second claim.",
+        actor: "human:test"
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "SUPPORT_CYCLE");
+        return true;
+      }
+    );
+    const afterRejectedAttempt = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(afterRejectedAttempt.revision, beforeRejectedAttempt.revision);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

@@ -18,3 +18,19 @@ The reviewer also requested correcting the README's unsupported chosen-output-di
 Configured-project routing uses a fixed ID-to-root map and rejects unknown IDs before dispatch. The reviewer found success/error payloads and stdout protocol separation consistent with the inspected contract.
 
 All findings were accepted and assigned to Luna as sequential regression fixes. The pre-test process deviation cannot be repaired retrospectively. Production graph workflow, complete schema/legacy/restart coverage and installed-client calls against the finished server remain final integration work.
+
+## Correction review
+
+The Spec reviewer found no remaining material issue after `43448ab`. The
+Standards reviewer requested one further test-quality correction: a 250 ms
+delay between process writes did not guarantee that the first chunk had been
+consumed. Commit `a104b70` added a deterministic test through public
+`runCli` input, while retaining the process smoke with an explicit timing
+limitation. An old-decoder sensitivity check was labelled as such, not a
+retroactive red. Final Standards re-review of `43448ab...a104b70` reported no
+actionable findings and no new hard process violation.
+
+Installed Codex calls against the production server have now observed both
+configured projects and each scoped shared KB; see the separate
+[client evidence](codex-client-smoke.md). Full production graph lifecycle and
+restart verification remain integration work.

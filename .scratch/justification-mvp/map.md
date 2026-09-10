@@ -71,6 +71,25 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
   [ci-baseline.md](../../docs/implementation/ci-baseline.md); no other runner
   platform is claimed.
 
+## Delivery decisions recorded by the primary ADR runtime slice
+
+- The first complete runtime behavior uses a project-relative UTF-8 file
+  provider, exact-byte SHA-256 observations, one retained evidence node per
+  present observation, explicit support groups, and revision-pinned original
+  basis for decision/artifact records. `why` reports that original basis,
+  later alternatives, deterministic upstream ancestry and retained
+  provenance; the generated Markdown projection renders the same identifiers
+  and rationale for a reader without the runtime.
+- The slice intentionally stops after `capture_source`, `record`, `justify`
+  and `why` plus the existing export behavior. Refresh, impact, review,
+  promotion, conflict, rebuild and search semantics remain pending their own
+  public red-green cycles rather than being inferred from this chain.
+- Review of the support graph exposed and corrected a traversal-direction bug:
+  when adding `conclusion -> premise`, cycle detection now checks whether the
+  existing graph already reaches the conclusion from that premise. A public
+  `A <- B <- A` regression records both the rejected error and unchanged
+  durable revision.
+
 ## Out of scope
 
 - The broader vision beyond the original MVP: the delivery limits in the implementation contract remain explicit.
