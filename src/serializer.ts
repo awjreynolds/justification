@@ -33,6 +33,8 @@ export type ProjectionWriteOptions = {
 };
 
 const MANIFEST_PATH = [".justification", "projection-manifest.json"];
+const DISPOSABLE_IGNORE_PATH = [".justification", ".gitignore"];
+const DISPOSABLE_IGNORE_CONTENT = "*\n!.gitignore\n";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -201,6 +203,17 @@ async function ensureSafeDirectory(path: string): Promise<void> {
 async function ensureProjectionRoots(root: string): Promise<void> {
   await ensureSafeDirectory(join(root, "kb"));
   await ensureSafeDirectory(join(root, ".justification"));
+  const ignorePath = join(root, ...DISPOSABLE_IGNORE_PATH);
+  try {
+    const info = await lstat(ignorePath);
+    if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError("disposable ignore file must be a regular file");
+  } catch (error) {
+    if (error instanceof ProjectionError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const temporary = `${ignorePath}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+  await writeFile(temporary, DISPOSABLE_IGNORE_CONTENT, "utf8");
+  await rename(temporary, ignorePath);
 }
 
 async function readManifest(root: string, ignoreInvalidManifest: boolean): Promise<Record<string, string> | undefined> {

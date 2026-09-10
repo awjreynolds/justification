@@ -201,3 +201,50 @@ allows rebuild to recover the generated file, and the node, fixed-time `why`
 result and revision remain intact. This passed immediately with the existing
 historical ownership implementation (`5 recovery tests, 5 passes`), so no
 artificial red run was claimed.
+
+## Cycle: Git-ignore native layout
+
+The next public behavior uses a real temporary Git repository with an existing
+byte-exact root `.gitignore`. It captures a source, records a claim, rebuilds,
+and checks the generated disposable index and projection manifest with
+`git check-ignore`. The numbered history revision and generated KB document
+must remain unignored. It then deletes all of `.justification/`, rebuilds, and
+repeats the ignore checks and exact `.gitignore` preservation assertion.
+
+The deliberate RED run was:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm run build && \
+  PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  node --test test/recovery.test.ts
+```
+
+The build passed and the five existing recovery behaviors remained green. The
+new Git-ignore behavior failed at its first disposable-path assertion because
+`.justification/index.json` was not ignored:
+
+```text
+5 pass, 1 failure
+AssertionError: false !== true
+test/recovery.test.ts:426
+```
+
+This is a meaningful RED because the test reaches the real Git ignore engine,
+observes the current public rebuild output and verifies native-file treatment
+independently of the serializer. No production Git-ignore handling has been
+added after this run; the next step is to implement the smallest preservation
+and managed-ignore update, then rerun this focused test.
+
+The minimum GREEN implementation creates a managed `.justification/.gitignore`
+with `*` and an exception for that file itself whenever the disposable
+projection root is created. It atomically replaces that managed file on later
+cache creation, including rebuild after the complete `.justification/` tree is
+deleted. The root `.gitignore` is never read or written, so its bytes remain
+unchanged. The focused run then passed all six recovery behaviors, and the
+project typecheck passed:
+
+```text
+6 tests, 6 passes, 0 failures
+npm run typecheck: passed
+```

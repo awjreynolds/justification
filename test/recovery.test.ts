@@ -1,11 +1,15 @@
 import { strict as assert } from "node:assert";
+import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
 import { executeOperation, initializeProject } from "../src/index.ts";
+
+const execFile = promisify(execFileCallback);
 
 type ProjectionSnapshot = {
   readonly manifest: { readonly format: string; readonly version: number; readonly files: Record<string, string> };
@@ -17,6 +21,16 @@ async function readProjection(root: string): Promise<ProjectionSnapshot> {
   const files: Record<string, string> = {};
   for (const path of Object.keys(manifest.files).sort()) files[path] = await readFile(join(root, path), "utf8");
   return { manifest, files };
+}
+
+async function isGitIgnored(root: string, relativePath: string): Promise<boolean> {
+  try {
+    await execFile("git", ["check-ignore", "--quiet", "--", relativePath], { cwd: root });
+    return true;
+  } catch (error) {
+    if ((error as { readonly code?: unknown }).code === 1) return false;
+    throw error;
+  }
 }
 
 test("rebuild restores disposable state and native copies without changing semantic explanations", async () => {
@@ -374,6 +388,54 @@ test("rebuild recovers a semantic revision after projection publication fails", 
     assert.equal((await readFile(join(root, "kb", "shared", `${nodeId}.md`), "utf8")).includes("Durable claim after projection failure"), true);
   } finally {
     await chmod(derivedPath, 0o700).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rebuild keeps disposable state ignored while preserving native project files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-recovery-gitignore-"));
+  const gitignorePath = join(root, ".gitignore");
+  const existingGitignore = Buffer.from("# Existing project rules\n.tmp/\n", "utf8");
+  try {
+    await writeFile(gitignorePath, existingGitignore);
+    await execFile("git", ["init"], { cwd: root });
+    await initializeProject(root);
+    const sourceLocator = "constraints.md";
+    await writeFile(join(root, sourceLocator), "The service must run offline.\n", "utf8");
+    await executeOperation(root, {
+      op: "capture_source",
+      locator: sourceLocator,
+      actor: "human:recovery",
+      at: "2026-09-10T09:00:00Z"
+    });
+    const recorded = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "The service runs offline",
+      body: "The retained constraint supports offline operation.",
+      actor: "human:recovery",
+      at: "2026-09-10T09:01:00Z"
+    });
+    const nodeId = (recorded.data as { readonly node: { readonly id: string } }).node.id;
+    const revisionPath = `justification-history/${recorded.revision.toString().padStart(12, "0")}.json`;
+    const generatedPath = `kb/shared/${nodeId}.md`;
+
+    await executeOperation(root, { op: "rebuild", actor: "operator:recovery", at: "2026-09-10T12:00:00Z" });
+    const assertIgnoreLayout = async (): Promise<void> => {
+      assert.equal(await isGitIgnored(root, ".justification/index.json"), true);
+      assert.equal(await isGitIgnored(root, ".justification/projection-manifest.json"), true);
+      assert.equal(await isGitIgnored(root, revisionPath), false);
+      assert.equal(await isGitIgnored(root, generatedPath), false);
+    };
+    await assertIgnoreLayout();
+    assert.deepEqual(await readFile(gitignorePath), existingGitignore);
+
+    await rm(join(root, ".justification"), { recursive: true, force: true });
+    await executeOperation(root, { op: "rebuild", actor: "operator:recovery", at: "2026-09-10T12:00:00Z" });
+    await assertIgnoreLayout();
+    assert.deepEqual(await readFile(gitignorePath), existingGitignore);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
