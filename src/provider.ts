@@ -50,6 +50,7 @@ export interface KnowledgeProvider {
 
 const MAX_SOURCE_BYTES = 4 * 1024 * 1024;
 const READ_CHUNK_BYTES = 64 * 1024;
+const MAX_SYMLINK_DEPTH = 40;
 const MANAGED_PATHS = new Set([".justification", "justification-history", "kb", "justification.json"]);
 
 function isContained(root: string, candidate: string): boolean {
@@ -91,7 +92,10 @@ function managedPathSegment(root: string, candidate: string): string | undefined
   return MANAGED_PATHS.has(first) ? first : undefined;
 }
 
-async function validateMissingPath(root: string, candidate: string, locator: string): Promise<void> {
+async function validateMissingPath(root: string, candidate: string, locator: string, activeSymlinks = new Set<string>(), depth = 0): Promise<void> {
+  if (depth > MAX_SYMLINK_DEPTH) {
+    throw new ProviderError("INVALID_LOCATOR", `source symlink chain is too deep: ${locator}`);
+  }
   let current = root;
   const parts = relative(root, candidate).split(sep).filter((part) => part.length > 0);
   for (const part of parts) {
@@ -105,37 +109,49 @@ async function validateMissingPath(root: string, candidate: string, locator: str
       throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot inspect source ${locator}`, { cause: error });
     }
     if (!info.isSymbolicLink()) continue;
+    const symlinkKey = normalize(current);
+    if (activeSymlinks.has(symlinkKey)) {
+      throw new ProviderError("INVALID_LOCATOR", `source symlink chain contains a cycle: ${locator}`);
+    }
+    activeSymlinks.add(symlinkKey);
 
-    let target: string;
     try {
-      target = await realpath(current);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
+      let target: string;
+      try {
+        target = await realpath(current);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "ELOOP") {
+          throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot resolve source ${locator}`, { cause: error });
+        }
+        let linkTarget: string;
+        try {
+          linkTarget = await readlink(current);
+        } catch (readError) {
+          throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot inspect source ${locator}`, { cause: readError });
+        }
+        target = isAbsolute(linkTarget) ? normalize(linkTarget) : normalize(join(dirname(current), linkTarget));
+      }
+      let targetAnchor: string;
+      try {
+        targetAnchor = await nearestExistingRealpath(target);
+      } catch (error) {
         throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot resolve source ${locator}`, { cause: error });
       }
-      let linkTarget: string;
-      try {
-        linkTarget = await readlink(current);
-      } catch (readError) {
-        throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot inspect source ${locator}`, { cause: readError });
+      if (!isContained(root, target) || !isContained(root, targetAnchor)) {
+        throw new ProviderError("INVALID_LOCATOR", `source symlink escapes the project root: ${locator}`);
       }
-      target = isAbsolute(linkTarget) ? normalize(linkTarget) : normalize(join(dirname(current), linkTarget));
+      const managed = managedPathSegment(root, target) ?? managedPathSegment(root, targetAnchor);
+      if (managed !== undefined) {
+        throw new ProviderError("INVALID_LOCATOR", `source path is inside managed runtime state: ${managed}`);
+      }
+      if (target !== current) {
+        await validateMissingPath(root, target, locator, activeSymlinks, depth + 1);
+      }
+      current = target;
+    } finally {
+      activeSymlinks.delete(symlinkKey);
     }
-    let targetAnchor: string;
-    try {
-      targetAnchor = await nearestExistingRealpath(target);
-    } catch (error) {
-      throw new ProviderError("PROVIDER_UNAVAILABLE", `cannot resolve source ${locator}`, { cause: error });
-    }
-    if (!isContained(root, target) || !isContained(root, targetAnchor)) {
-      throw new ProviderError("INVALID_LOCATOR", `source symlink escapes the project root: ${locator}`);
-    }
-    const managed = managedPathSegment(root, target) ?? managedPathSegment(root, targetAnchor);
-    if (managed !== undefined) {
-      throw new ProviderError("INVALID_LOCATOR", `source path is inside managed runtime state: ${managed}`);
-    }
-    current = target;
   }
 }
 

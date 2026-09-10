@@ -9,9 +9,9 @@ does not add refresh operations or change the runtime provider API.
 ## Symlink containment cycle
 
 The first public regression used `executeOperation` with an initialized
-temporary project. It created an existing directory outside the project,
-linked `project/external` to it, and captured `external/missing.md`. Before
-the provider change, the test produced this observed RED result:
+temporary project. It created a dangling directory symlink at
+`project/external` and captured `external/missing.md`. Before the provider
+change, the test produced this observed RED result:
 
 ```text
 ✖ capture_source rejects a missing target beneath a symlink that escapes the project
@@ -28,7 +28,8 @@ rejects canonical paths inside managed state. `fetch` re-resolves the locator
 before opening it, so a path retargeted between resolve and fetch fails closed
 unless the originally resolved file has simply disappeared.
 
-The same real-file test file then passed four checks:
+The same real-file test file then passed four checks, including internal and
+managed-state symlink coverage:
 
 ```text
 ✔ capture_source rejects a missing target beneath a symlink that escapes the project
@@ -39,6 +40,18 @@ tests 4
 pass 4
 fail 0
 ```
+
+After that GREEN result, a separate test added the equivalent case where the
+escaping symlink points to an existing outside directory and only the
+descendant is missing. It passed without a new historical RED, confirming
+that the correction covers both dangling and existing escaping parents.
+
+A further public regression then chained two dangling links
+(`first → second → outside-missing`) and observed the same missing rejection:
+the test failed with `Missing expected rejection` while the other five
+provider tests passed. Recursive validation with an active-link set and a
+bounded depth limit was the minimum correction. The focused provider suite
+then returned six passing tests, including the chain case.
 
 The internal-link assertion computes the expected SHA-256 over the UTF-8 bytes
 independently with `createHash`; it does not reuse provider code.
@@ -54,7 +67,7 @@ actual:   "internal source\n"
 expected: "﻿internal source\n"
 ```
 
-The four provider tests then returned GREEN, including equal text and byte
+The six provider tests then returned GREEN, including equal text and byte
 identities for that fixture.
 
 ## Bounded capture correction
@@ -75,8 +88,8 @@ The provider seam passed:
 
 ```text
 node --test test/provider.test.ts
-tests 4
-pass 4
+tests 6
+pass 6
 fail 0
 ```
 
@@ -86,8 +99,8 @@ working tree:
 ```text
 npm run typecheck
 npm test
-tests 44
-pass 44
+tests 47
+pass 47
 fail 0
 ```
 

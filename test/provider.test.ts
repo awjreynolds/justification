@@ -37,6 +37,66 @@ test("capture_source rejects a missing target beneath a symlink that escapes the
   }
 });
 
+test("capture_source rejects a missing target beneath an existing escaping directory symlink", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "justification-provider-existing-escape-"));
+  const root = join(parent, "project");
+  const outside = join(parent, "outside");
+
+  try {
+    await initializeProject(root);
+    await mkdir(outside);
+    await symlink(outside, join(root, "external"));
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "capture_source",
+        locator: "external/missing.md",
+        actor: "test:provider"
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof ProviderError, true);
+        assert.equal((error as ProviderError).code, "INVALID_LOCATOR");
+        return true;
+      }
+    );
+
+    const status = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(status.revision, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("capture_source rejects a missing target through chained dangling escaping symlinks", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "justification-provider-chain-"));
+  const root = join(parent, "project");
+  const outside = join(parent, "outside");
+
+  try {
+    await initializeProject(root);
+    await symlink(outside, join(root, "second"));
+    await symlink("second", join(root, "first"));
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "capture_source",
+        locator: "first/missing.md",
+        actor: "test:provider"
+      }),
+      (error: unknown) => {
+        assert.equal(error instanceof ProviderError, true);
+        assert.equal((error as ProviderError).code, "INVALID_LOCATOR");
+        return true;
+      }
+    );
+
+    const status = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(status.revision, 0);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("capture_source follows an internal symlink and preserves the captured bytes digest", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-provider-internal-"));
 
