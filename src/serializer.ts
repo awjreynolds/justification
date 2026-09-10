@@ -4,6 +4,7 @@ import { stringify as stringifyYaml } from "yaml";
 
 import { JUSTIFICATION_PROFILE, canonicalJson, sha256 } from "./domain.ts";
 import type { NodeRecord, ProjectState } from "./domain.ts";
+import { withProjectLock } from "./storage.ts";
 import { buildSupportTree } from "./support-tree.ts";
 import { supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
@@ -21,6 +22,13 @@ export type ProjectionDocument = {
 export type ProjectionResult = {
   readonly files: readonly string[];
   readonly manifestDigest: string;
+};
+
+export type ProjectionWriteOptions = {
+  readonly kb?: string;
+  readonly repair?: boolean;
+  readonly allowMissing?: boolean;
+  readonly generatedAt?: string;
 };
 
 const MANIFEST_PATH = [".justification", "projection-manifest.json"];
@@ -214,8 +222,8 @@ async function readManifest(root: string): Promise<Record<string, string> | unde
   }
 }
 
-async function detectDrift(root: string, manifest: Record<string, string>): Promise<void> {
-  for (const [path, expected] of Object.entries(manifest)) {
+async function detectDrift(root: string, expectedFiles: Record<string, string>, allowMissing: boolean): Promise<void> {
+  for (const [path, expected] of Object.entries(expectedFiles)) {
     try {
       const info = await lstat(join(root, path));
       if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`generated projection is not a regular file: ${path}`);
@@ -223,20 +231,30 @@ async function detectDrift(root: string, manifest: Record<string, string>): Prom
       if (actual !== expected) throw new ProjectionError(`generated projection was modified: ${path}`);
     } catch (error) {
       if (error instanceof ProjectionError) throw error;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT" && allowMissing) continue;
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ProjectionError(`generated projection is missing: ${path}`);
       throw error;
     }
   }
 }
 
-async function preflightTargets(root: string, documents: readonly ProjectionDocument[], previous: Record<string, string> | undefined): Promise<void> {
+async function preflightTargets(
+  root: string,
+  documents: readonly ProjectionDocument[],
+  expectedFiles: Record<string, string>,
+  repair: boolean
+): Promise<void> {
   for (const document of documents) {
     const path = document.relativePath.replaceAll("\\", "/");
     const absolute = join(root, document.relativePath);
     try {
       const info = await lstat(absolute);
       if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`projection destination is not a regular file: ${path}`);
-      if (!previous || previous[path] === undefined) throw new ProjectionError(`projection destination is already owned outside the generated manifest: ${path}`);
+      if (repair) continue;
+      const expected = expectedFiles[path];
+      if (expected === undefined) throw new ProjectionError(`projection destination is not a known generated path: ${path}`);
+      const actual = sha256(await readFile(absolute));
+      if (actual !== expected) throw new ProjectionError(`generated projection was modified: ${path}`);
     } catch (error) {
       if (error instanceof ProjectionError) throw error;
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ProjectionError(`cannot inspect projection destination: ${path}`, { cause: error });
@@ -244,32 +262,54 @@ async function preflightTargets(root: string, documents: readonly ProjectionDocu
   }
 }
 
-export async function writeProjection(root: string, state: ProjectState, options: { readonly kb?: string; readonly repair?: boolean; readonly generatedAt?: string } = {}): Promise<ProjectionResult> {
-  await ensureProjectionRoots(root);
-  const previous = await readManifest(root);
-  if (previous && !options.repair) await detectDrift(root, previous);
-  const documents = projectDocuments(state, options.generatedAt, options.kb);
-  await preflightTargets(root, documents, previous);
-  const files: Record<string, string> = previous === undefined ? {} : { ...previous };
-  const writtenFiles: string[] = [];
-  for (const document of documents) {
-    const absolute = join(root, document.relativePath);
-    const rootRelative = relative(root, absolute);
-    if (rootRelative.startsWith(`..${sep}`)) throw new ProjectionError(`projection path escapes project root: ${document.relativePath}`);
-    await ensureSafeDirectory(join(root, dirnameFromRelative(document.relativePath)));
-    const temporary = `${absolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-    await writeFile(temporary, document.content, "utf8");
-    await rename(temporary, absolute);
-    const path = document.relativePath.replaceAll("\\", "/");
-    files[path] = sha256(document.content);
-    writtenFiles.push(path);
-  }
-  const manifest = { format: "justification.projection", version: 1, files };
-  const manifestAbsolute = join(root, ...MANIFEST_PATH);
-  const temporaryManifest = `${manifestAbsolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-  await writeFile(temporaryManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  await rename(temporaryManifest, manifestAbsolute);
-  return { files: writtenFiles.sort(), manifestDigest: sha256(canonicalJson(manifest)) };
+export async function writeProjection(root: string, state: ProjectState, options: ProjectionWriteOptions = {}): Promise<ProjectionResult> {
+  return withProjectLock(root, async () => {
+    await ensureProjectionRoots(root);
+    const previous = await readManifest(root);
+    const generatedAt = options.generatedAt ?? new Date().toISOString();
+    const allDocuments = projectDocuments(state, generatedAt);
+    const documents = options.kb === undefined ? allDocuments : projectDocuments(state, generatedAt, options.kb);
+    const currentOwnership: Record<string, string> = {};
+    for (const document of allDocuments) currentOwnership[document.relativePath.replaceAll("\\", "/")] = sha256(document.content);
+
+    // Manifest entries are disposable and untrusted. Preserve only paths that
+    // are independently derivable from the validated semantic state. When the
+    // manifest is missing, current revision state plus its committed timestamp
+    // provides the historical generated bytes used for ownership checks.
+    const ownedPrevious: Record<string, string> = {};
+    if (previous !== undefined) {
+      for (const [path, digest] of Object.entries(previous)) {
+        if (Object.prototype.hasOwnProperty.call(currentOwnership, path)) ownedPrevious[path] = digest;
+      }
+    }
+    if (previous && !options.repair) await detectDrift(root, ownedPrevious, options.allowMissing === true);
+    const expectedTargets: Record<string, string> = {};
+    for (const document of documents) {
+      const path = document.relativePath.replaceAll("\\", "/");
+      expectedTargets[path] = ownedPrevious[path] ?? currentOwnership[path] ?? sha256(document.content);
+    }
+    await preflightTargets(root, documents, expectedTargets, options.repair === true);
+    const files: Record<string, string> = { ...ownedPrevious };
+    const writtenFiles: string[] = [];
+    for (const document of documents) {
+      const absolute = join(root, document.relativePath);
+      const rootRelative = relative(root, absolute);
+      if (rootRelative.startsWith(`..${sep}`)) throw new ProjectionError(`projection path escapes project root: ${document.relativePath}`);
+      await ensureSafeDirectory(join(root, dirnameFromRelative(document.relativePath)));
+      const temporary = `${absolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+      await writeFile(temporary, document.content, "utf8");
+      await rename(temporary, absolute);
+      const path = document.relativePath.replaceAll("\\", "/");
+      files[path] = sha256(document.content);
+      writtenFiles.push(path);
+    }
+    const manifest = { format: "justification.projection", version: 1, files };
+    const manifestAbsolute = join(root, ...MANIFEST_PATH);
+    const temporaryManifest = `${manifestAbsolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+    await writeFile(temporaryManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await rename(temporaryManifest, manifestAbsolute);
+    return { files: writtenFiles.sort(), manifestDigest: sha256(canonicalJson(manifest)) };
+  });
 }
 
 function dirnameFromRelative(path: string): string {

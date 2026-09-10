@@ -30,6 +30,7 @@ import type {
 import { ensureHistory, PostCommitError, readHistory, transact } from "./storage.ts";
 import { FileKnowledgeProvider, ProviderError } from "./provider.ts";
 import { ProjectionError, writeProjection } from "./serializer.ts";
+import { handleRebuild } from "./recovery.ts";
 import { buildSupportTree, supportNodeIds, supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
 import { validateRuntimeRequest } from "./requests.ts";
@@ -757,6 +758,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
   if (request.op === "record") return handleRecord(root, request);
   if (request.op === "justify") return handleJustify(root, request);
   if (request.op === "why") return handleWhy(root, request);
+  if (request.op === "rebuild") return handleRebuild(root, request);
   if (request.op === "export") {
     if (request.kb !== undefined) findKb(current.state, request.kb);
     if (request.outputDir !== undefined && request.outputDir !== root) {

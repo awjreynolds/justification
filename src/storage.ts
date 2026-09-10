@@ -1,4 +1,5 @@
 import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 
 import {
@@ -42,6 +43,7 @@ export type LoadedHistory = {
 
 const HISTORY_DIRECTORY = "justification-history";
 const LOCK_FILE = ".lock";
+const projectLockContext = new AsyncLocalStorage<ReadonlySet<string>>();
 
 export function historyDirectory(root: string): string {
   return join(root, HISTORY_DIRECTORY);
@@ -303,14 +305,16 @@ export class PostCommitError extends Error {
   }
 }
 
-export async function transact<T>(
-  root: string,
-  actor: string,
-  action: string,
-  mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T },
-  afterCommit?: (revision: HistoryRevision, value: T) => Promise<void>
-): Promise<TransactionResult<T>> {
-  const current = await ensureHistory(root);
+/**
+ * Serialize any operation that reads durable history and writes project state.
+ * The async-local context makes projection publication from a transaction
+ * re-entrant without allowing an unrelated process to pass an existing lock.
+ */
+export async function withProjectLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  const active = projectLockContext.getStore();
+  if (active?.has(root) === true) return operation();
+
+  await ensureHistory(root);
   const directory = await assertSafeHistoryDirectory(root);
   const lockPath = join(directory, LOCK_FILE);
   let lockHandle: Awaited<ReturnType<typeof open>> | undefined;
@@ -323,7 +327,26 @@ export async function transact<T>(
     }
     throw error;
   }
+  const nextContext = new Set(active);
+  nextContext.add(root);
   try {
+    return await projectLockContext.run(nextContext, operation);
+  } finally {
+    await lockHandle.close().catch(() => undefined);
+    await rm(lockPath, { force: true }).catch(() => undefined);
+  }
+}
+
+export async function transact<T>(
+  root: string,
+  actor: string,
+  action: string,
+  mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T },
+  afterCommit?: (revision: HistoryRevision, value: T) => Promise<void>
+): Promise<TransactionResult<T>> {
+  await ensureHistory(root);
+  return withProjectLock(root, async () => {
+    const directory = await assertSafeHistoryDirectory(root);
     const fresh = await readHistory(root);
     const nextRevision = fresh.revision.revision + 1;
     const proposed = mutate(structuredClone(fresh.revision.state), nextRevision);
@@ -352,10 +375,7 @@ export async function transact<T>(
       }
     }
     return { revision, value: proposed.value, committed: true };
-  } finally {
-    await lockHandle.close().catch(() => undefined);
-    await rm(lockPath, { force: true }).catch(() => undefined);
-  }
+  });
 }
 
 export async function historyRevisions(root: string): Promise<HistoryRevision[]> {
