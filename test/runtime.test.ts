@@ -77,6 +77,19 @@ test("export writes a readable current OKF projection and preserves unrelated KB
   const root = await mkdtemp(join(tmpdir(), "justification-runtime-export-"));
   try {
     await initializeProject(root);
+    await executeOperation(root, { op: "knowledge_bases" });
+    await rewriteInitialRevision(root, (state) => {
+      const nodes = state.nodes as Record<string, unknown>;
+      nodes.claim1 = {
+        id: "claim1",
+        kb: "shared",
+        kind: "claim",
+        title: "Retained claim",
+        body: "A retained claim.",
+        createdBy: "human:test",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      };
+    });
     const keepPath = join(root, "kb", "shared", "keep.txt");
     await writeFile(keepPath, "unrelated project knowledge\n", "utf8");
 
@@ -97,6 +110,43 @@ test("export writes a readable current OKF projection and preserves unrelated KB
     const sharedIndex = await readFile(join(root, "kb", "shared", "index.md"), "utf8");
     assert.equal(sharedIndex.startsWith("---\n"), false);
     assert.equal(sharedIndex.startsWith("# Shared knowledge\n"), true);
+
+    const claim = await readFile(join(root, "kb", "shared", "claim1.md"), "utf8");
+    assert.equal(claim.startsWith("---\n"), true);
+    const claimClosing = claim.indexOf("\n---\n", 4);
+    assert.ok(claimClosing > 4);
+    const claimFrontmatter = parseDocument(claim.slice(4, claimClosing)).toJSON() as { type?: string; justification?: { id?: string } };
+    assert.equal(claimFrontmatter.type, "claim");
+    assert.equal(claimFrontmatter.justification?.id, "claim1");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("export refuses a human-owned generated destination before any publication", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-export-collision-"));
+  try {
+    await initializeProject(root);
+    const humanPath = join(root, "kb", "shared", "index.md");
+    const humanBytes = "# Human-owned knowledge base index\nKeep this exact file.\n";
+    await writeFile(humanPath, humanBytes, "utf8");
+
+    await assert.rejects(
+      executeOperation(root, { op: "export" }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "PROJECTION_DRIFT");
+        return true;
+      }
+    );
+    assert.equal(await readFile(humanPath, "utf8"), humanBytes);
+    await assert.rejects(readFile(join(root, "kb", "index.md")), (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
+      return true;
+    });
+    await assert.rejects(readFile(join(root, ".justification", "projection-manifest.json")), (error: unknown) => {
+      assert.equal((error as NodeJS.ErrnoException).code, "ENOENT");
+      return true;
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -109,20 +159,26 @@ test("runtime rejects integrity-valid history with dangling domain references", 
       kbs.child = { id: "child", title: "Child", parent: "missing", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
     }],
     ["source node", (state) => {
+      addFixtureNode(state, "valid-source-node", "source");
       const sources = state.sources as Record<string, unknown>;
       sources.source1 = { id: "source1", nodeId: "missing", kb: "shared", providerId: "file", locator: "note.md", availability: "missing", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
     }],
     ["observation source", (state) => {
+      addFixtureNode(state, "valid-source-node", "source");
+      const sources = state.sources as Record<string, unknown>;
+      sources.source1 = { id: "source1", nodeId: "valid-source-node", kb: "shared", providerId: "file", locator: "note.md", availability: "missing", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
       const observations = state.observations as Record<string, unknown>;
       observations.observation1 = { id: "observation1", sourceId: "missing", providerId: "file", locator: "note.md", availability: "missing", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
     }],
     ["justification premises", (state) => {
+      addFixtureNode(state, "valid-claim", "claim");
       const justifications = state.justifications as Record<string, unknown>;
-      justifications.justification1 = { id: "justification1", kb: "shared", conclusion: "missing", groups: [{ id: "group1", premises: ["also-missing"] }], rationale: "fixture", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
+      justifications.justification1 = { id: "justification1", kb: "shared", conclusion: "valid-claim", groups: [{ id: "group1", premises: ["missing-premise"] }], rationale: "fixture", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
     }],
     ["relationship endpoints", (state) => {
+      addFixtureNode(state, "valid-node", "claim");
       const relationships = state.relationships as Record<string, unknown>;
-      relationships.relationship1 = { id: "relationship1", kb: "shared", from: "missing", to: "also-missing", type: "depends_on", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
+      relationships.relationship1 = { id: "relationship1", kb: "shared", from: "valid-node", to: "missing", type: "depends_on", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
     }]
   ];
 
@@ -144,6 +200,11 @@ test("runtime rejects integrity-valid history with dangling domain references", 
     }
   }
 });
+
+function addFixtureNode(state: Record<string, unknown>, id: string, kind: string): void {
+  const nodes = state.nodes as Record<string, unknown>;
+  nodes[id] = { id, kb: "shared", kind, title: id, body: "fixture", createdBy: "test", createdAt: "2026-01-01T00:00:00.000Z" };
+}
 
 test("create_kb rejects nested knowledge bases beyond the shared parent", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-runtime-kb-parent-"));

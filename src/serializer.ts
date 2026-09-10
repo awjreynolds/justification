@@ -110,7 +110,10 @@ async function ensureProjectionRoots(root: string): Promise<void> {
 
 async function readManifest(root: string): Promise<Record<string, string> | undefined> {
   try {
-    const parsed: unknown = JSON.parse(await readFile(join(root, ...MANIFEST_PATH), "utf8"));
+    const manifestPath = join(root, ...MANIFEST_PATH);
+    const info = await lstat(manifestPath);
+    if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError("projection manifest must be a regular file");
+    const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
     if (!isRecord(parsed) || !isRecord(parsed.files)) throw new ProjectionError("projection manifest is malformed");
     const files: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed.files)) {
@@ -128,6 +131,8 @@ async function readManifest(root: string): Promise<Record<string, string> | unde
 async function detectDrift(root: string, manifest: Record<string, string>): Promise<void> {
   for (const [path, expected] of Object.entries(manifest)) {
     try {
+      const info = await lstat(join(root, path));
+      if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`generated projection is not a regular file: ${path}`);
       const actual = sha256(await readFile(join(root, path)));
       if (actual !== expected) throw new ProjectionError(`generated projection was modified: ${path}`);
     } catch (error) {
@@ -138,11 +143,27 @@ async function detectDrift(root: string, manifest: Record<string, string>): Prom
   }
 }
 
+async function preflightTargets(root: string, documents: readonly ProjectionDocument[], previous: Record<string, string> | undefined): Promise<void> {
+  for (const document of documents) {
+    const path = document.relativePath.replaceAll("\\", "/");
+    const absolute = join(root, document.relativePath);
+    try {
+      const info = await lstat(absolute);
+      if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`projection destination is not a regular file: ${path}`);
+      if (!previous || previous[path] === undefined) throw new ProjectionError(`projection destination is already owned outside the generated manifest: ${path}`);
+    } catch (error) {
+      if (error instanceof ProjectionError) throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ProjectionError(`cannot inspect projection destination: ${path}`, { cause: error });
+    }
+  }
+}
+
 export async function writeProjection(root: string, state: ProjectState, options: { readonly kb?: string; readonly repair?: boolean; readonly generatedAt?: string } = {}): Promise<ProjectionResult> {
   await ensureProjectionRoots(root);
   const previous = await readManifest(root);
   if (previous && !options.repair) await detectDrift(root, previous);
   const documents = projectDocuments(state, options.generatedAt, options.kb);
+  await preflightTargets(root, documents, previous);
   const files: Record<string, string> = {};
   for (const document of documents) {
     const absolute = join(root, document.relativePath);

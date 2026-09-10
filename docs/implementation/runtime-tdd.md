@@ -52,6 +52,44 @@ existing guard passed immediately and durable revision remained unchanged
 (`28` tests passed). No new red result is claimed for that already implemented
 check.
 
+## Export collision correction
+
+Review found that a first export could overwrite a human-created
+`kb/shared/index.md`. The new public regression was run before the fix with:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm test -- --test-name-pattern='human-owned generated destination'
+```
+
+It failed with `Missing expected rejection`, and the human bytes had been
+replaced. The minimum fix preflights every generated destination, rejects
+unowned existing files, and only writes after all targets pass. The same
+command then passed with no root index, manifest, or human-byte changes. A
+follow-up focused run:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm test -- --test-name-pattern='export (writes|refuses)'
+```
+
+passed all `29` tests. The export fixture now also places an integrity-valid
+retained claim in durable history and independently parses its concept
+frontmatter, while checking the reserved root and KB index rules.
+
+The domain-reference fixture was strengthened after its initial green run so
+each case has valid neighboring data: a source fixture has a valid node beside
+the invalid source link, an observation fixture has a valid source beside the
+invalid source ID, the justification fixture has a valid conclusion with only
+the premise dangling, and the relationship fixture has one valid endpoint.
+This was coverage enhancement, not a new historical red. The focused command
+was rerun and passed all `29` tests:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm test -- --test-name-pattern='dangling domain references'
+```
+
 The currently implemented runtime operations are `knowledge_bases`,
 `create_kb`, and `export`. The remaining operation discriminants are typed and
 documented for transport integration but still fail as unsupported until their
