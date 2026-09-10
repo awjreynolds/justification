@@ -664,6 +664,13 @@ function contradictionScope(state: ProjectState, left: NodeRecord, right: NodeRe
     findKb(state, requestedKb);
     visibleNode(state, left.id, requestedKb);
     visibleNode(state, right.id, requestedKb);
+    if (requestedKb !== "shared" && left.kb === "shared" && right.kb === "shared") {
+      throw new RuntimeError("SCOPE_VIOLATION", "a child-scoped contradiction requires at least one endpoint owned by that knowledge base", {
+        kb: requestedKb,
+        left: left.id,
+        right: right.id
+      });
+    }
     return requestedKb;
   }
   if (left.kb === right.kb) return left.kb;
@@ -1157,7 +1164,7 @@ async function handleReview(root: string, request: Extract<RuntimeRequest, { op:
     if (request.status !== "closed") throw new RuntimeError("INVALID_REQUEST", "review mutations only support closing a review");
     const actor = requireActor(request as ActorRequest);
     const rationale = assertRationale(request.rationale);
-    const closedAt = atTime(request.at);
+    const requestedClosedAt = request.at === undefined ? undefined : atTime(request.at);
     const reviewId = request.reviewId;
     const baseline = request.expectedRevision ?? loaded.revision.revision;
     return commitMutation(root, actor, "review", baseline, (draftState) => {
@@ -1167,11 +1174,15 @@ async function handleReview(root: string, request: Extract<RuntimeRequest, { op:
       visibleNode(draftState, current.nodeId, request.kb);
       if (current.status === "closed") {
         const history = current.closureHistory ?? [];
-        const sameClosure = current.closedBy === actor && current.closedAt === closedAt && current.closureRationale === rationale &&
-          history.length > 0 && history[history.length - 1]?.actor === actor && history[history.length - 1]?.at === closedAt && history[history.length - 1]?.rationale === rationale;
+        const sameClosure = current.closedBy === actor && current.closureRationale === rationale &&
+          (requestedClosedAt === undefined || current.closedAt === requestedClosedAt) &&
+          history.length > 0 && history[history.length - 1]?.actor === actor &&
+          (requestedClosedAt === undefined || history[history.length - 1]?.at === requestedClosedAt) &&
+          history[history.length - 1]?.rationale === rationale;
         if (!sameClosure) throw new RuntimeError("CONFLICT", `review ${reviewId} is already closed with different closure metadata`, { reviewId });
         return { state: draftState, value: { review: current, committed: false, idempotent: true }, committed: false };
       }
+      const closedAt = requestedClosedAt ?? atTime(undefined);
       const closure: ReviewClosure = { status: "closed", actor, at: closedAt, rationale };
       const updated: ReviewRecord = {
         ...current,

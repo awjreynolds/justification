@@ -104,13 +104,15 @@ test("closes a source-change review without refreshing stale support and preserv
     const whyAfterClosure = await executeOperation(root, { op: "why", nodeId: claimId, kb: "shared" });
     assert.equal((whyAfterClosure.data as { support: { status: string } }).support.status, "pending");
 
+    await executeOperation(root, { op: "export", kb: "shared" });
+    const markdownBeforeIdempotentRetry = await readFile(join(root, "kb", "shared", `${claimId}.md`), "utf8");
+
     const repeated = await executeOperation(root, {
       op: "review",
       reviewId: claimReview.id,
       status: "closed",
       rationale: closureRationale,
       actor: "human:reviewer",
-      at: closedAt,
       expectedRevision: closed.revision
     });
     const repeatedData = repeated.data as {
@@ -121,7 +123,9 @@ test("closes a source-change review without refreshing stale support and preserv
     assert.equal(repeated.revision, closed.revision);
     assert.equal(repeatedData.committed, false);
     assert.equal(repeatedData.idempotent, true);
+    assert.equal((repeatedData.review as { closedAt?: string }).closedAt, closedData.review.closedAt);
     assert.deepEqual(repeatedData.review.closureHistory, closedData.review.closureHistory);
+    assert.equal(await readFile(join(root, "kb", "shared", `${claimId}.md`), "utf8"), markdownBeforeIdempotentRetry);
 
     await writeFile(join(root, sourceLocator), "research result: changed again\n", "utf8");
     const secondRefresh = await executeOperation(root, {
@@ -160,6 +164,79 @@ test("closes a source-change review without refreshing stale support and preserv
     assert.equal(claimDocument.includes("## Review status"), true);
     assert.equal(claimDocument.includes("support depends on changed evidence"), true);
     assert.equal(claimDocument.includes(closureRationale), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a child-scoped contradiction whose endpoints are both shared", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-knowledge-actions-ownerless-conflict-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, {
+      op: "create_kb",
+      id: "adr",
+      title: "Architecture decision",
+      actor: "human:scope",
+      at: "2026-09-11T10:00:00Z"
+    });
+    const left = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Shared claim A",
+      body: "The shared evidence supports claim A.",
+      actor: "human:shared",
+      at: "2026-09-11T10:00:01Z"
+    });
+    const right = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Shared claim B",
+      body: "The shared evidence supports claim B.",
+      actor: "human:shared",
+      at: "2026-09-11T10:00:02Z"
+    });
+    const leftId = (left.data as { node: { id: string } }).node.id;
+    const rightId = (right.data as { node: { id: string } }).node.id;
+
+    await executeOperation(root, { op: "export", kb: "adr" });
+    const childIndexPath = join(root, "kb", "adr", "index.md");
+    const childIndexBefore = await readFile(childIndexPath, "utf8");
+    const humanPath = join(root, "kb", "adr", "editor-notes.md");
+    const humanBytes = "Keep this child-owned note unchanged.\n";
+    await writeFile(humanPath, humanBytes, "utf8");
+    const before = await executeOperation(root, { op: "knowledge_bases" });
+
+    const conflictRationale = "These shared claims cannot be owned by an ADR child without a local endpoint.";
+    await assert.rejects(
+      executeOperation(root, {
+        op: "contradict",
+        kb: "adr",
+        left: leftId,
+        right: rightId,
+        rationale: conflictRationale,
+        actor: "human:reviewer",
+        at: "2026-09-11T10:00:03Z",
+        expectedRevision: before.revision
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "SCOPE_VIOLATION");
+        const details = (error as { details?: { kb?: string; left?: string; right?: string } }).details;
+        assert.deepEqual(details, { kb: "adr", left: leftId, right: rightId });
+        return true;
+      }
+    );
+
+    const after = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(after.revision, before.revision);
+    const conflicts = await executeOperation(root, { op: "conflicts", kb: "adr" });
+    assert.deepEqual((conflicts.data as { conflicts: unknown[] }).conflicts, []);
+    assert.equal(await readFile(childIndexPath, "utf8"), childIndexBefore);
+    assert.equal(await readFile(humanPath, "utf8"), humanBytes);
+    await executeOperation(root, { op: "export", kb: "adr" });
+    assert.equal((await readFile(childIndexPath, "utf8")).includes(conflictRationale), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -406,6 +483,14 @@ test("records scoped contradictions, preserves resolution history, and keeps unr
     assert.equal(sharedSearchResult?.flags?.disputed, false);
     const localWhy = await executeOperation(root, { op: "why", nodeId: localId, kb: "adr" });
     assert.equal((localWhy.data as { reviews: Array<{ triggerId: string; status: string }> }).reviews.some((review) => review.triggerId === contradictedData.contradiction.id && review.status === "open"), true);
+    const sharedReviews = await executeOperation(root, { op: "review", kb: "shared" });
+    assert.equal((sharedReviews.data as { reviews: Array<{ triggerId: string }> }).reviews.some((review) => review.triggerId === contradictedData.contradiction.id), false);
+    const siblingReviews = await executeOperation(root, { op: "review", kb: "research" });
+    assert.equal((siblingReviews.data as { reviews: Array<{ triggerId: string }> }).reviews.some((review) => review.triggerId === contradictedData.contradiction.id), false);
+    const sharedAudit = await executeOperation(root, { op: "audit", kb: "shared", evaluationTime: "2026-09-10T17:00:00Z" });
+    assert.equal((sharedAudit.data as { findings: Array<{ category: string; contradictionId?: string }> }).findings.some((finding) => finding.category === "open_contradiction" && finding.contradictionId === contradictedData.contradiction.id), false);
+    const localAudit = await executeOperation(root, { op: "audit", kb: "adr", evaluationTime: "2026-09-10T17:00:00Z" });
+    assert.equal((localAudit.data as { findings: Array<{ category: string; contradictionId?: string }> }).findings.some((finding) => finding.category === "open_contradiction" && finding.contradictionId === contradictedData.contradiction.id), true);
     await executeOperation(root, { op: "export", kb: "shared" });
     const sharedDocument = await readFile(join(root, "kb", "shared", `${sharedId}.md`), "utf8");
     assert.equal(sharedDocument.includes(localId), false);

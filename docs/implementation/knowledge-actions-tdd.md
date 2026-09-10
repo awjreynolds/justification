@@ -129,7 +129,7 @@ and `unresolved` records its rationale while returning the contradiction to
 The first implementation run was meaningful RED: `node --test
 test/knowledge-actions.test.ts` passed the review fixture but failed the new
 fixture at request validation because `contradict` did not accept its scoped
-KB (2 passing, 1 failing). The minimum implementation added scoped
+KB (1 passing, 1 failing). The minimum implementation added scoped
 contradiction records, conflict listing, resolution history and winner checks,
 scope-filtered contradiction reviews/projection, and dispatcher handlers. The
 same command is GREEN with 3 passing and 0 failing after the relationship
@@ -165,3 +165,51 @@ sections with readable IDs, statuses, reasons, links and attributed closure or
 resolution rationale. The same focused command is now GREEN with 3 passing and
 0 failing, while shared and sibling documents continue to omit child-owned
 details.
+
+## Follow-up cycle: idempotent closure without an optional timestamp
+
+An already closed review must accept a retry with the same status, actor and
+rationale when the caller supplies the current expected revision and omits
+`at`. The retry is a no-op: it returns the original revision, preserves the
+stored `closedAt` and closure history, and leaves the generated Markdown bytes
+unchanged. This makes retries safe when the client did not persist its first
+request timestamp.
+
+The public review fixture was tightened to omit `at` on the repeated close and
+to compare the generated owning document before and after the retry. The
+first focused run was meaningful RED: the closed-review branch created a fresh
+timestamp and returned `CONFLICT` (2 passing, 1 failing). The minimum handler
+change compares actor and rationale without requiring a new timestamp when
+`at` is omitted, while still checking an explicitly supplied timestamp. The
+focused command is now GREEN with 4 passing and 0 failing; the retry preserves
+the original `closedAt`, one closure-history entry, revision and generated
+Markdown bytes.
+
+## Visibility verification: child contradiction against shared knowledge
+
+The existing child-vs-shared contradiction fixture now checks every public
+read surface after the contradiction is left unresolved. `why`, `review` and
+`audit` for the shared KB and an unrelated sibling exclude the child-owned
+review and rationale, while the owning child exposes the open review and audit
+finding. The focused four-test run passes these checks. This is verification
+of the current visibility policy, separate from the two observed regressions.
+
+## Follow-up cycle: reject an ownerless child contradiction
+
+An explicitly child-scoped contradiction must have at least one endpoint owned
+by that child. If both endpoints are inherited shared nodes, there is no child
+node document on which the child-owned rationale and review can be rendered.
+The runtime therefore rejects the request with `SCOPE_VIOLATION` and actionable
+endpoint/scope details before committing a contradiction or review. The
+semantic revision and generated child projection remain unchanged.
+
+The regression uses two shared claims, requests `contradict` with `kb: "adr"`,
+and snapshots the child index and a human-authored child file around the
+request. The first focused run was meaningful RED: the public call committed
+the contradiction, so the assertion reported `Missing expected rejection`
+(3 passing, 1 failing). The minimum scope guard now rejects it with
+`SCOPE_VIOLATION` and `{ kb, left, right }` before any revision, review or
+projection change. Existing child contradictions with a local endpoint remain
+covered by the original fixture. The focused command is now GREEN with 4
+passing and 0 failing, including unchanged child Markdown and human file
+bytes.

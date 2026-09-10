@@ -117,7 +117,7 @@ The runtime checks that their premises are available and applicable; it does not
 infer truth from arbitrary prose or call a language model. A changed or missing
 source makes dependent support pending and can open review; it does not mark a
 claim false. Multiple groups are alternatives, so a surviving alternative can
-  remain usable while the original basis is reviewed.
+remain usable while the original basis is reviewed.
 
 ## Create knowledge outputs
 
@@ -131,8 +131,8 @@ digest identify the version whose basis was recorded.
 The readable `kb/` projection is also compiled knowledge in its own right.
 It preserves attributed knowledge and reasoning for reuse across sessions and
 outputs. The runtime manages these relationships and their maintenance; the
-person or agent supplies interpretation and writes the output. The first
-example uses an ADR to exercise these general operations.
+person or agent supplies interpretation and writes the output. The default
+example writes a research brief; the second example records an ADR.
 
 ## CLI JSON transport
 
@@ -151,9 +151,37 @@ For example, `request.json` can contain:
   "op": "search",
   "query": "latency",
   "kb": "checkout-cache",
-  "budget": 20
+  "budget": 4096
 }
 ```
+
+For `search`, `context` and `trace`, `budget` is the maximum UTF-8 byte size of
+the complete runtime JSON response, including its revision. It defaults to
+32768 bytes. Results use a deterministic prefix and report `truncated` when
+the next result would exceed the limit. A budget too small for the empty
+response produces `INVALID_REQUEST` with the required minimum. Query summaries
+report support, assumption, dispute and pending flags separately from
+`reviewRequired` and `openReviewIds`.
+
+`trace` takes a `nodeId` and optional `direction` (`upstream` or `downstream`).
+`context` can take a `nodeId`, a lexical `query`, or both. Search is lexical;
+these operations do not generate a synthesis or infer new relationships.
+
+## Record conflicts and close review work
+
+Record a conflict with `contradict`, supplying `left`, `right`, `rationale` and
+`actor`. Inspect the returned identifier with `conflicts`. Resolve it using
+`resolve_conflict` with `contradictionId`, `resolution`, `rationale` and `actor`.
+The `supersession` resolution also requires `winnerId` naming one endpoint.
+Other resolutions are `different_scope`, `different_time`, `source_error`
+and `unresolved`; the last keeps the conflict open. Resolutions retain history
+and do not rewrite either node's content or support.
+
+List review work with `{ "op": "review", "kb": "checkout-cache" }`. To close
+one item, supply `reviewId`, `status: "closed"`, `actor` and `rationale`, with
+an optional `at` timestamp and `expectedRevision`. Closing acknowledges the
+item; changed evidence may still be pending, and a separate contradiction may
+still be open. A later distinct change can create new review work.
 
 Use the `init` and `projects` commands for bootstrap and discovery. Use `run`
 for all graph operations; it keeps the CLI surface aligned with the runtime.
