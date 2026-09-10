@@ -35,7 +35,8 @@ type RuntimeRequest =
 ```
 
 Mutations may include `expectedRevision` to fail closed when the caller's
-read is stale. `record` accepts the eleven node kinds in `NodeKind`. Decision and artifact
+read is stale. The graph has twelve node kinds in `NodeKind`; `capture_source`
+creates source and evidence records, while `record` creates the other kinds. Decision and artifact
 records must include a nonempty `basis` or `basisGroups`; the runtime creates
 the original basis justification in the same revision and records its revision
 on the node. Later `justify` calls are current alternatives and never rewrite
@@ -54,7 +55,7 @@ the projection does not contain the complete native revision history. Native
 history remains the numbered, integrity-chained snapshots in
 `justification-history/`.
 
-For the primary ADR chain, mutation results use these concrete data members:
+For a captured knowledge chain, mutation results use these concrete data members:
 
 ```json
 {
@@ -67,7 +68,7 @@ For the primary ADR chain, mutation results use these concrete data members:
   "justify": { "justification": { "id": "justification-id", "conclusion": "node-id", "groups": [{ "premises": ["evidence-id"] }] } },
   "why": {
     "node": { "id": "node-id" },
-    "originalBasis": { "justification": { "id": "basis-id", "recordedAtRevision": 7 } },
+    "originalBasis": { "justification": { "id": "basis-id" }, "recordedAtRevision": 7 },
     "upstream": [{ "id": "evidence-id" }, { "id": "source-node-id" }],
     "provenance": [{ "sourceId": "source-id", "observationId": "observation-id", "observedText": "..." }]
   }

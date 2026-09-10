@@ -20,7 +20,7 @@ Its reported verification used an archived revision without `dist/`, a fresh
 locked dependency installation, typecheck and all 54 tests. The original
 hosted failure and local reproduction are recorded in [CI evidence](ci-baseline.md).
 
-## Spec findings awaiting correction
+## Resolved Spec findings
 
 1. Calendar validation accepted `2026-02-30t00:00:00Z` and normalized it to
    March 2 because an unmatched timestamp spelling skipped the calendar check.
@@ -33,5 +33,16 @@ hosted failure and local reproduction are recorded in [CI evidence](ci-baseline.
    caller fields by node kind so artifact-file handling cannot be bypassed.
 
 The Spec reviewer reproduced all three against an isolated committed build.
-Each correction needs a public regression, minimum implementation, and review
-before this review can be considered closed.
+Commit `72cd3a5` corrected each through an observed public RED and minimum
+GREEN, and additionally restricted KB IDs to lowercase to prevent portable
+path collisions such as `Shared` with `shared`. The Spec re-review found no
+remaining material issue.
+
+The Standards re-review requested independent locator-only and digest-only
+claim checks. Commit `dc08caf` adds those checks with a valid hexadecimal
+digest, typed rejection and unchanged public state. They passed immediately
+and are recorded as verification. The final Standards review closed the
+coverage finding; the validation file then had ten passing tests.
+
+This bounded review is closed. The initial process deviation remains recorded;
+the four subsequent corrections followed the required red–green sequence.
