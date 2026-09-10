@@ -109,6 +109,12 @@ case-insensitive path collisions before completing scope acceptance.
   revision, deterministic disposable index metadata and generated projection
   ownership metadata. The exact shape and first red-green evidence are in
   [recovery-tdd.md](../../docs/implementation/recovery-tdd.md).
+- Disposable projection state is kept out of Git by the managed
+  `.justification/.gitignore` created with every projection-root creation;
+  existing root `.gitignore` bytes are preserved, while numbered history and
+  generated `kb/` documents remain trackable. The focused Git-ignore recovery
+  behavior and green evidence are recorded in
+  [recovery-tdd.md](../../docs/implementation/recovery-tdd.md).
 - The first recovery fixture uses a real file observation, claim support and
   decision basis, then compares fixed-time `why` output and generated files
   after deleting the complete `.justification/` tree. It also rebuilds a copy
@@ -169,6 +175,28 @@ case-insensitive path collisions before completing scope acceptance.
   21 tests with the pinned Node v24.21.0 build and typecheck; the full package
   run's unrelated recovery/request-validation failures remain owned by those
   slices.
+- A scoped refresh returns only reviews visible in its requested KB, while a
+  shared-source transition still persists reviews for all dependent child
+  scopes. The public regression first observed child B's review leaking into a
+  child A refresh response; the correction filters only the response and
+  preserves the durable child B review for a subsequent scoped query. The
+  focused runtime run then passed 22 tests with 0 failures.
+- Repeated source changes propagate from every retained evidence node that is
+  still referenced by a support basis and whose digest/provider revision no
+  longer matches the current source. This preserves immutable observations,
+  lets restored matching bytes become usable, and creates a fresh review
+  trigger for the original evidence and dependents when a later distinct
+  change makes them pending again. Newly captured current evidence is never
+  marked as an old basis. The A → B → restored A → C public regression and
+  the prior runtime suite pass 23 tests with 0 failures.
+- Operational provider failures for a known source are recorded as durable
+  `denied` or `unavailable` observations through the same capture/refresh
+  transition owner. The transition records availability change and reviews
+  retained evidence plus declared dependents; repeated identical availability
+  remains revision-idempotent, while invalid locators (including escaping
+  symlinks) still fail before commit. The inaccessible-directory regression
+  passed all 24 runtime tests on pinned Node v24.21.0, with typecheck and
+  `git diff --check` green.
 
 ## Out of scope
 

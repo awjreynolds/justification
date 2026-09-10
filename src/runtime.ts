@@ -29,6 +29,7 @@ import type {
 } from "./domain.ts";
 import { ensureHistory, PostCommitError, readHistory, transact } from "./storage.ts";
 import { FileKnowledgeProvider, ProviderError } from "./provider.ts";
+import type { ProviderFetch } from "./provider.ts";
 import { ProjectionError, writeProjection } from "./serializer.ts";
 import { handleRebuild } from "./recovery.ts";
 import { buildSupportTree, supportNodeIds, supportProvenance } from "./support-tree.ts";
@@ -316,6 +317,42 @@ function sourceStateMatches(source: SourceRecord | undefined, fetched: { status:
   return fetched.status !== "present" || (source.currentDigest === fetched.digest && source.providerRevision === fetched.providerRevision);
 }
 
+function providerFailureFetch(locator: string, error: unknown): ProviderFetch | undefined {
+  if (!(error instanceof ProviderError) || error.code !== "PROVIDER_UNAVAILABLE") return undefined;
+  let current: unknown = error;
+  let denied = false;
+  const seen = new Set<unknown>();
+  while (current !== null && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const code = (current as { readonly code?: unknown }).code;
+    if (code === "EACCES" || code === "EPERM") {
+      denied = true;
+      break;
+    }
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return {
+    status: denied ? "denied" : "unavailable",
+    locator,
+    diagnostics: error.message
+  };
+}
+
+async function fetchKnownSource(
+  provider: FileKnowledgeProvider,
+  locator: string,
+  knownSource: SourceRecord | undefined
+): Promise<{ readonly resolved?: Awaited<ReturnType<FileKnowledgeProvider["resolve"]>>; readonly fetched: ProviderFetch }> {
+  try {
+    const resolved = await provider.resolve(locator);
+    return { resolved, fetched: await provider.fetch(resolved) };
+  } catch (error) {
+    const failure = providerFailureFetch(locator, error);
+    if (failure !== undefined && knownSource !== undefined && knownSource.locator === locator) return { fetched: failure };
+    throw error;
+  }
+}
+
 function evidenceNodeForObservation(state: ProjectState, observationId: string): NodeRecord | undefined {
   return Object.values(state.nodes).find((node) => node.kind === "evidence" && node.fields?.observationId === observationId);
 }
@@ -413,25 +450,31 @@ type SourceTransition = {
 function appendChangeReviews(
   draftState: MutableState,
   change: ChangeRecord,
-  beforeObservationId: string | undefined,
+  sourceId: string,
   actor: string,
   createdAt: string,
   kb?: string
 ): ReviewRecord[] {
-  const oldEvidence = beforeObservationId === undefined
-    ? undefined
-    : evidenceNodeForObservation(draftState, beforeObservationId);
-  if (oldEvidence === undefined) return [];
-  const nodeIds = [oldEvidence.id, ...downstreamNodeIds(draftState, [oldEvidence.id], kb)];
+  const source = hasOwn(draftState.sources as Record<string, unknown>, sourceId) ? draftState.sources[sourceId] : undefined;
+  if (source === undefined) return [];
+  const referencedEvidence = Object.values(draftState.nodes)
+    .filter((node) => node.kind === "evidence" && node.fields?.sourceId === sourceId)
+    .filter((evidence) => Object.values(draftState.justifications).some((justification) => justification.groups.some((group) => group.premises.includes(evidence.id))))
+    .filter((evidence) => !observationMatchesSource(source, observationForEvidence(draftState, evidence)))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const nodeIds: string[] = [];
+  for (const evidence of referencedEvidence) {
+    nodeIds.push(evidence.id, ...downstreamNodeIds(draftState, [evidence.id], kb));
+  }
   const reviews: ReviewRecord[] = [];
-  for (const nodeId of nodeIds) {
+  for (const nodeId of [...new Set(nodeIds)]) {
     if (draftState.reviews.some((review) => review.nodeId === nodeId && review.triggerId === change.id)) continue;
     const review: ReviewRecord = {
       id: randomUUID(),
       nodeId,
       triggerType: "change",
       triggerId: change.id,
-      reason: nodeId === oldEvidence.id ? "source observation changed" : "support depends on changed evidence",
+      reason: referencedEvidence.some((evidence) => evidence.id === nodeId) ? "source observation changed" : "support depends on changed evidence",
       status: "open",
       createdBy: actor,
       createdAt
@@ -552,7 +595,7 @@ function applySourceTransition(
       createdAt: context.createdAt
     };
     draft.changes = [...draft.changes, change];
-    reviews = appendChangeReviews(draft, change, freshExisting.currentObservationId, context.actor, context.createdAt, context.reviewKb ?? (freshExisting.kb === "shared" ? undefined : freshExisting.kb));
+    reviews = appendChangeReviews(draft, change, sourceId, context.actor, context.createdAt, context.reviewKb ?? (freshExisting.kb === "shared" ? undefined : freshExisting.kb));
   }
 
   return { source, observation, evidence: evidenceDescriptor(evidence), change, reviews, changed: true };
@@ -603,6 +646,14 @@ function scopedReviews(state: ProjectState, kb?: string): ReviewRecord[] {
     const node = hasOwn(state.nodes as Record<string, unknown>, review.nodeId) ? state.nodes[review.nodeId] : undefined;
     return node !== undefined && (kb === undefined || node.kb === "shared" || node.kb === kb);
   }));
+}
+
+function reviewsVisibleInKb(state: ProjectState, reviews: readonly ReviewRecord[], kb?: string): ReviewRecord[] {
+  if (kb !== undefined) findKb(state, kb);
+  return reviews.filter((review) => {
+    const node = hasOwn(state.nodes as Record<string, unknown>, review.nodeId) ? state.nodes[review.nodeId] : undefined;
+    return node !== undefined && (kb === undefined || node.kb === "shared" || node.kb === kb);
+  });
 }
 
 function supportSourceIds(tree: SupportTree): string[] {
@@ -715,24 +766,28 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
   const kb = request.kb ?? "shared";
   findKb(state, kb);
   const provider = new FileKnowledgeProvider(root);
-  const resolved = await provider.resolve(request.locator);
   const requestedSourceId = request.sourceId === undefined ? undefined : requireUuid(request.sourceId, "sourceId");
   const sourceById = requestedSourceId === undefined || !hasOwn(state.sources as Record<string, unknown>, requestedSourceId)
     ? undefined
     : state.sources[requestedSourceId];
+  const sourceByRequestedLocator = sourceByLocator(state, request.locator, kb);
+  const fetchedSource = await fetchKnownSource(provider, request.locator, sourceById ?? sourceByRequestedLocator);
+  const resolved = fetchedSource.resolved;
   if (sourceById !== undefined) {
-    if (sourceById.providerId !== provider.id || sourceById.locator !== resolved.locator) {
-      throw new RuntimeError("CONFLICT", `source identity ${requestedSourceId} is already bound to ${sourceById.locator}`, { sourceId: requestedSourceId, locator: sourceById.locator, requestedLocator: resolved.locator });
+    const requestedLocator = resolved?.locator ?? request.locator;
+    if (sourceById.providerId !== provider.id || sourceById.locator !== requestedLocator) {
+      throw new RuntimeError("CONFLICT", `source identity ${requestedSourceId} is already bound to ${sourceById.locator}`, { sourceId: requestedSourceId, locator: sourceById.locator, requestedLocator });
     }
     if (sourceById.kb !== "shared" && sourceById.kb !== kb) {
       throw new RuntimeError("SCOPE_VIOLATION", `source ${requestedSourceId} belongs to knowledge base ${sourceById.kb}`, { sourceId: requestedSourceId, sourceKb: sourceById.kb, requestedKb: kb });
     }
   }
-  const existing = sourceByLocator(state, resolved.locator, kb);
+  const normalizedLocator = resolved?.locator ?? request.locator;
+  const existing = sourceByLocator(state, normalizedLocator, kb);
   if (requestedSourceId !== undefined && existing !== undefined && existing.id !== requestedSourceId) {
-    throw new RuntimeError("CONFLICT", `source locator is already associated with ${existing.id}`, { locator: resolved.locator, sourceId: existing.id });
+    throw new RuntimeError("CONFLICT", `source locator is already associated with ${existing.id}`, { locator: normalizedLocator, sourceId: existing.id });
   }
-  const fetched = await provider.fetch(resolved);
+  const fetched = fetchedSource.fetched;
   const sourceId = existing?.id ?? requestedSourceId ?? randomUUID();
   if (existing && sourceStateMatches(existing, fetched)) {
     if (request.expectedRevision !== undefined && request.expectedRevision !== loaded.revision.revision) {
@@ -748,12 +803,12 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
   const baseline = request.expectedRevision ?? loaded.revision.revision;
   const createdAt = atTime(request.at);
   type CaptureValue = { source: SourceRecord; observation: SourceObservation; evidence: (NodeRecord & { sourceId: string; observationId: string }) | null; changed: boolean; committed: boolean; change?: ChangeRecord; reviews: readonly ReviewRecord[] };
-  return commitMutation<CaptureValue>(root, actor, "capture_source", baseline, (draftState) => {
+  const result = await commitMutation<CaptureValue>(root, actor, "capture_source", baseline, (draftState) => {
     const transition = applySourceTransition(draftState, sourceId, fetched, {
       kb,
       actor,
       createdAt,
-      locator: resolved.locator,
+      locator: normalizedLocator,
       title: request.title
     });
     return {
@@ -769,6 +824,13 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
       }
     };
   });
+  return {
+    revision: result.revision,
+    data: {
+      ...result.data,
+      reviews: reviewsVisibleInKb(state, result.data.reviews, request.kb ?? "shared")
+    }
+  };
 }
 
 async function handleInspectSource(root: string, request: Extract<RuntimeRequest, { op: "inspect_source" }>): Promise<RuntimeResponse> {
@@ -851,11 +913,17 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
   const provider = new FileKnowledgeProvider(root);
   const fetched = new Map<string, Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>>();
   for (const source of selected) {
-    const resolved = await provider.resolve(source.locator);
-    if (resolved.locator !== source.locator) {
-      throw new RuntimeError("CONFLICT", `source identity ${source.id} is bound to a noncanonical locator`, { sourceId: source.id, locator: source.locator, resolvedLocator: resolved.locator });
+    try {
+      const resolved = await provider.resolve(source.locator);
+      if (resolved.locator !== source.locator) {
+        throw new RuntimeError("CONFLICT", `source identity ${source.id} is bound to a noncanonical locator`, { sourceId: source.id, locator: source.locator, resolvedLocator: resolved.locator });
+      }
+      fetched.set(source.id, await provider.fetch(resolved));
+    } catch (error) {
+      const failure = providerFailureFetch(source.locator, error);
+      if (failure === undefined) throw error;
+      fetched.set(source.id, failure);
     }
-    fetched.set(source.id, await provider.fetch(resolved));
   }
   const unchanged = selected.every((source) => sourceStateMatches(source, fetched.get(source.id)));
   if (unchanged) {
@@ -867,7 +935,7 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
   const createdAt = atTime(request.at);
   const baseline = request.expectedRevision ?? loaded.revision.revision;
   type RefreshValue = { readonly changed: boolean; readonly sources: SourceRecord[]; readonly observations: SourceObservation[]; readonly changes: ChangeRecord[]; readonly reviews: ReviewRecord[]; readonly committed: boolean };
-  return commitMutation<RefreshValue>(root, actor, "refresh", baseline, (draftState) => {
+  const result = await commitMutation<RefreshValue>(root, actor, "refresh", baseline, (draftState) => {
     const transitions: SourceTransition[] = [];
     for (const source of selected) {
       const result = applySourceTransition(draftState, source.id, fetched.get(source.id) as Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>, {
@@ -894,6 +962,13 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
       }
     };
   });
+  return {
+    revision: result.revision,
+    data: {
+      ...result.data,
+      reviews: reviewsVisibleInKb(state, result.data.reviews, request.kb)
+    }
+  };
 }
 
 async function handleImpact(root: string, request: Extract<RuntimeRequest, { op: "impact" }>): Promise<RuntimeResponse> {

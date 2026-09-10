@@ -328,3 +328,60 @@ created a new observation, returned no duplicate review work, and made the
 original evidence usable by digest/provider revision. The complete package
 run remains subject to the separate recovery and request-validation workers'
 tests; those unrelated failures are recorded by their owning slices.
+
+## Scoped source-review response correction: GREEN
+
+The scoped source regression created one shared source whose retained evidence
+supported claims in two child KBs. Before the correction, a refresh requested
+for child A returned the durable review for child B as well, even though the
+child B review was correctly persisted. The focused public test failed with
+`true !== false` after 21 passing runtime tests.
+
+The minimum correction filters mutation response arrays by the requested KB
+after the shared-source transition has propagated reviews globally. The
+durable review list remains scope-aware, so a later `review` query for child B
+still exposes its affected claim. The focused runtime verification now passes
+22 tests with 0 failures; typecheck and `git diff --check` remain green.
+
+## Repeated source-change propagation correction: GREEN
+
+The retained-observation regression exercised a source changing from A to B,
+returning to A, and then changing to C. The original A evidence made the
+claim and its generic research output usable again after restoration, but the
+next change initially seeded review only from the immediately previous A
+observation. The public test therefore failed when the latest change lacked a
+review for the original evidence (`false !== true`) despite 22 passing runtime
+tests.
+
+The minimum correction finds every retained evidence node for the source that
+is actually referenced by a support basis. On each source transition it
+compares those observations with the new source digest and provider revision,
+then reviews only the mismatching prior bases and their downstream dependents.
+The newly captured current evidence is retained for provenance and impact but
+is not treated as an old basis. Distinct changes receive distinct review
+triggers, so a later change can create new work even when an earlier review is
+eventually acknowledged. The focused runtime verification now passes 23 tests
+with 0 failures; typecheck and `git diff --check` remain green.
+
+## Operational source-availability correction: GREEN
+
+The availability regression captured a real source and a claim → artifact
+support chain, removed directory read access, and refreshed the known source.
+Before the correction, provider resolution surfaced a raw
+`ProviderError(PROVIDER_UNAVAILABLE)` and left the durable source marked
+present. The public test therefore stopped before it could inspect the
+transition.
+
+The minimum correction maps known-source provider resolution and fetch access
+failures to a durable `denied` or `unavailable` provider result. The shared
+source-transition path then appends an unavailable observation and
+`availability_changed` record, reviews the retained evidence and declared
+dependents, and makes current `why` assessment pending. Repeating the same
+availability state remains revision-idempotent through the existing
+availability comparison. Invalid locator errors, including escaping symlinks,
+continue to propagate instead of becoming source state. Capture and refresh
+use the same narrow provider-failure mapping for an already identified source.
+
+The pinned Node v24.21.0 verification passed all 24 runtime tests, including
+the inaccessible-source regression, with 0 failures. `npm run typecheck` and
+`git diff --check` also passed.

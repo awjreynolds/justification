@@ -1249,6 +1249,249 @@ test("refreshes changed evidence and exposes the exact ADR impact with durable r
   }
 });
 
+test("scopes a refresh response while retaining shared-source reviews for each child", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-scoped-refresh-reviews-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, { op: "create_kb", id: "child-a", title: "Child A", actor: "human:test" });
+    await executeOperation(root, { op: "create_kb", id: "child-b", title: "Child B", actor: "human:test" });
+    const sourceLocator = "evidence/shared-source.txt";
+    await mkdir(join(root, "evidence"), { recursive: true });
+    await writeFile(join(root, sourceLocator), "shared source: initial\n", "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as { source: { id: string }; evidence: { id: string } };
+
+    const childAClaim = await executeOperation(root, {
+      op: "record",
+      kb: "child-a",
+      kind: "claim",
+      title: "Child A claim",
+      body: "Child A relies on the shared source.",
+      actor: "human:a"
+    });
+    const childAClaimId = (childAClaim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "child-a",
+      conclusion: childAClaimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "The shared observation supports child A.",
+      actor: "human:a"
+    });
+
+    const childBClaim = await executeOperation(root, {
+      op: "record",
+      kb: "child-b",
+      kind: "claim",
+      title: "Child B claim",
+      body: "Child B relies on the shared source.",
+      actor: "human:b"
+    });
+    const childBClaimId = (childBClaim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "child-b",
+      conclusion: childBClaimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "The shared observation supports child B.",
+      actor: "human:b"
+    });
+
+    await writeFile(join(root, sourceLocator), "shared source: changed\n", "utf8");
+    const refreshed = await executeOperation(root, {
+      op: "refresh",
+      kb: "child-a",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    const refreshData = refreshed.data as { reviews: Array<{ nodeId: string }> };
+    const returnedReviewNodeIds = new Set(refreshData.reviews.map((review) => review.nodeId));
+    assert.equal(returnedReviewNodeIds.has(childAClaimId), true);
+    assert.equal(returnedReviewNodeIds.has(capturedData.evidence.id), true);
+    assert.equal(returnedReviewNodeIds.has(childBClaimId), false);
+
+    const childBReviews = await executeOperation(root, { op: "review", kb: "child-b" });
+    const childBReviewNodeIds = new Set((childBReviews.data as { reviews: Array<{ nodeId: string }> }).reviews.map((review) => review.nodeId));
+    assert.equal(childBReviewNodeIds.has(childBClaimId), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reopens the original retained basis when a restored source changes again", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-repeated-change-"));
+  try {
+    await initializeProject(root);
+    const sourceLocator = "research/source.txt";
+    const sourceA = "research result: A\n";
+    const sourceB = "research result: B\n";
+    const sourceC = "research result: C\n";
+    await mkdir(join(root, "research"), { recursive: true });
+    await writeFile(join(root, sourceLocator), sourceA, "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as { source: { id: string }; evidence: { id: string } };
+
+    const claim = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Research result A is retained",
+      body: "The initial research observation supports this claim.",
+      actor: "human:researcher"
+    });
+    const claimId = (claim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "shared",
+      conclusion: claimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "The retained A observation supports the claim.",
+      actor: "human:researcher"
+    });
+    const output = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "artifact",
+      title: "Research output",
+      body: "A research output based directly on the retained claim.",
+      basis: [claimId],
+      actor: "human:researcher"
+    });
+    const outputId = (output.data as { node: { id: string } }).node.id;
+
+    await writeFile(join(root, sourceLocator), sourceB, "utf8");
+    await executeOperation(root, {
+      op: "refresh",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    await writeFile(join(root, sourceLocator), sourceA, "utf8");
+    const restored = await executeOperation(root, {
+      op: "refresh",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    const restoredWhy = await executeOperation(root, { op: "why", nodeId: claimId, kb: "shared" });
+    assert.equal((restoredWhy.data as { support: { status: string } }).support.status, "usable");
+    const restoredOutputWhy = await executeOperation(root, { op: "why", nodeId: outputId, kb: "shared" });
+    assert.equal((restoredOutputWhy.data as { support: { status: string } }).support.status, "usable");
+
+    await writeFile(join(root, sourceLocator), sourceC, "utf8");
+    const changedAgain = await executeOperation(root, {
+      op: "refresh",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    const latestChange = (changedAgain.data as { changes: Array<{ id: string }> }).changes[0];
+    assert.ok(latestChange);
+    const changedWhy = await executeOperation(root, { op: "why", nodeId: claimId, kb: "shared" });
+    assert.equal((changedWhy.data as { support: { status: string } }).support.status, "pending");
+    const changedOutputWhy = await executeOperation(root, { op: "why", nodeId: outputId, kb: "shared" });
+    assert.equal((changedOutputWhy.data as { support: { status: string } }).support.status, "pending");
+
+    const reviews = await executeOperation(root, { op: "review", kb: "shared" });
+    const latestReviews = (reviews.data as { reviews: Array<{ nodeId: string; triggerId: string }> }).reviews.filter((review) => review.triggerId === latestChange.id);
+    const latestReviewNodeIds = new Set(latestReviews.map((review) => review.nodeId));
+    assert.equal(latestReviewNodeIds.has(capturedData.evidence.id), true);
+    assert.equal(latestReviewNodeIds.has(claimId), true);
+    assert.equal(latestReviewNodeIds.has(outputId), true);
+    assert.equal(latestReviews.length > 0, true);
+    assert.equal(restored.revision < changedAgain.revision, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("records inaccessible source availability as a durable review transition", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-unavailable-"));
+  const sourceDirectory = join(root, "research");
+  try {
+    await initializeProject(root);
+    const sourceLocator = "research/source.txt";
+    await mkdir(sourceDirectory, { recursive: true });
+    await writeFile(join(root, sourceLocator), "research result: retained\n", "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as { source: { id: string }; evidence: { id: string } };
+    const claim = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "The retained research is available",
+      body: "The source observation supports this claim.",
+      actor: "human:researcher"
+    });
+    const claimId = (claim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "shared",
+      conclusion: claimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "The retained observation supports the claim.",
+      actor: "human:researcher"
+    });
+    const output = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "artifact",
+      title: "Research output",
+      body: "A direct output based on the research claim.",
+      basis: [claimId],
+      actor: "human:researcher"
+    });
+    const outputId = (output.data as { node: { id: string } }).node.id;
+
+    await chmod(sourceDirectory, 0o000);
+    let refreshed: Awaited<ReturnType<typeof executeOperation>>;
+    try {
+      refreshed = await executeOperation(root, {
+        op: "refresh",
+        sourceIds: [capturedData.source.id],
+        actor: "human:refresh"
+      });
+    } finally {
+      await chmod(sourceDirectory, 0o755);
+    }
+    const refreshData = refreshed.data as {
+      changed: boolean;
+      sources: Array<{ availability: string }>;
+      observations: Array<{ availability: string }>;
+      changes: Array<{ id: string; reason: string; afterAvailability: string }>;
+      reviews: Array<{ nodeId: string; triggerId: string }>;
+    };
+    assert.equal(refreshData.changed, true);
+    assert.equal(["unavailable", "denied"].includes(refreshData.sources[0]?.availability ?? ""), true);
+    assert.equal(["unavailable", "denied"].includes(refreshData.observations[0]?.availability ?? ""), true);
+    assert.equal(refreshData.changes[0]?.reason, "availability_changed");
+    assert.equal(["unavailable", "denied"].includes(refreshData.changes[0]?.afterAvailability ?? ""), true);
+    const latestChangeId = refreshData.changes[0]?.id;
+    assert.ok(latestChangeId);
+    const reviewNodeIds = new Set(refreshData.reviews.filter((review) => review.triggerId === latestChangeId).map((review) => review.nodeId));
+    assert.equal(reviewNodeIds.has(capturedData.evidence.id), true);
+    assert.equal(reviewNodeIds.has(claimId), true);
+    assert.equal(reviewNodeIds.has(outputId), true);
+    const claimWhy = await executeOperation(root, { op: "why", nodeId: claimId, kb: "shared" });
+    assert.equal((claimWhy.data as { support: { status: string } }).support.status, "pending");
+  } finally {
+    await chmod(sourceDirectory, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rejects a justification that would close a support cycle", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-runtime-cycle-"));
   try {
