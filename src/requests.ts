@@ -38,7 +38,7 @@ const recordFieldsSchema = z
 
 const recordSchema = z
   .object({
-    id: z.string().min(1).optional(),
+    id: z.string().uuid().refine((value) => value === value.toLowerCase(), "record id must be a lowercase UUID").optional(),
     kb: z.string().min(1),
     kind: z.enum(NODE_KINDS),
     title: z.string().min(1),

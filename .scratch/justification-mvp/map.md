@@ -76,6 +76,15 @@ case-insensitive path collisions before completing scope acceptance.
   `.justification/` as disposable. It names only typed errors and layouts
   observed in the implementation/contract; runtime-specific response wording
   remains owned by the implementation slice.
+- The general knowledge-output example uses two fictional file captures, two
+  independently justified claims, an open question and a generated research
+  brief recorded as an artifact with the survey claim as direct basis. The
+  independent notes claim remains a separate reusable branch. It changes only
+  the survey source, checks exact impact and review IDs while the independent
+  notes remain unaffected, reports the current brief as pending reassessment,
+  and compares a historical `why` response at the artifact revision. The ADR
+  example remains available through `demo:adr` and now asserts its exact
+  source-to-artifact impact and review chain.
 - CI uses only `ubuntu-latest`, declares top-level `contents: read`, and pins
   the dated official releases `actions/checkout` v7.0.1 and
   `actions/setup-node` v7.0.0 to full commit hashes. The release and
@@ -197,6 +206,30 @@ case-insensitive path collisions before completing scope acceptance.
   symlinks) still fail before commit. The inaccessible-directory regression
   passed all 24 runtime tests on pinned Node v24.21.0, with typecheck and
   `git diff --check` green.
+- The portability regression for an explicit `record.id` first committed a
+  lowercase UUID, then exposed that uppercase spelling could reach semantic
+  commit and collide with the existing generated path on a case-insensitive
+  filesystem (`PROJECTION_FAILED`). The request schema now rejects explicit
+  UUIDs whose spelling is not already lowercase with `INVALID_REQUEST` before
+  revision advance. Generated IDs remain unchanged; the focused validation
+  run passed 11 tests, with typecheck and `git diff --check` green.
+- Source change reviews seed from every retained evidence node whose observed
+  source state is stale, then traverse declared support and dependency edges.
+  This covers standalone old evidence and explicit artifact dependencies even
+  when no justification directly names the evidence; freshly matching current
+  evidence remains unreviewed. The regression first returned an empty review
+  set and now passes as part of the 25-test runtime verification.
+- Source impact and review propagation also traverse direct dependencies of
+  the source graph node. The regression for an artifact linked directly to a
+  source first omitted that artifact from impact and reviews; the correction
+  preserves source-to-artifact paths, retains old and new evidence in impact,
+  and reviews only the old evidence plus the artifact. The runtime suite now
+  passes 26 tests with typecheck and `git diff --check` green.
+- Durable source records no longer expose `lastCheckedAt`; polling time is
+  operational metadata and each immutable observation carries its own
+  attribution. A public assertion first caught the field on capture, then the
+  type and transition snapshot were narrowed. The 26-test runtime suite,
+  typecheck and diff check pass after the cleanup.
 
 ## Out of scope
 

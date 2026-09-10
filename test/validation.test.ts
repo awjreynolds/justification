@@ -324,3 +324,46 @@ test("runtime rejects a digest on an ordinary claim by itself", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("runtime rejects uppercase explicit record IDs before advancing revision", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-validation-record-id-case-"));
+  const recordId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  try {
+    await initializeProject(root);
+    await executeOperation(root, {
+      op: "record",
+      id: recordId,
+      kb: "shared",
+      kind: "claim",
+      title: "Canonical record ID",
+      body: "The lowercase ID is already present.",
+      actor: "validation:test"
+    });
+    const before = await executeOperation(root, { op: "knowledge_bases" });
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "record",
+        id: recordId.toUpperCase(),
+        kb: "shared",
+        kind: "claim",
+        title: "Case collision must be rejected",
+        body: "This request must not reach projection publication.",
+        actor: "validation:test"
+      } as never),
+      (error: unknown) => {
+        const candidate = error as { code?: string; message?: string };
+        assert.equal(candidate.code, "INVALID_REQUEST");
+        assert.match(candidate.message ?? "", /lowercase|lower-case|lower case/i);
+        return true;
+      }
+    );
+
+    const after = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(after.revision, before.revision);
+    assert.deepEqual(after.data, before.data);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

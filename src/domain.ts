@@ -84,7 +84,6 @@ export type SourceRecord = Attribution & {
   readonly availability: SourceAvailability;
   readonly providerRevision?: string;
   readonly currentDigest?: string;
-  readonly lastCheckedAt?: string;
 };
 
 export type SourceObservation = Attribution & {

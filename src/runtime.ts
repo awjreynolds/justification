@@ -457,15 +457,15 @@ function appendChangeReviews(
 ): ReviewRecord[] {
   const source = hasOwn(draftState.sources as Record<string, unknown>, sourceId) ? draftState.sources[sourceId] : undefined;
   if (source === undefined) return [];
-  const referencedEvidence = Object.values(draftState.nodes)
+  const changedEvidence = Object.values(draftState.nodes)
     .filter((node) => node.kind === "evidence" && node.fields?.sourceId === sourceId)
-    .filter((evidence) => Object.values(draftState.justifications).some((justification) => justification.groups.some((group) => group.premises.includes(evidence.id))))
     .filter((evidence) => !observationMatchesSource(source, observationForEvidence(draftState, evidence)))
     .sort((a, b) => a.id.localeCompare(b.id));
   const nodeIds: string[] = [];
-  for (const evidence of referencedEvidence) {
+  for (const evidence of changedEvidence) {
     nodeIds.push(evidence.id, ...downstreamNodeIds(draftState, [evidence.id], kb));
   }
+  nodeIds.push(...downstreamNodeIds(draftState, [source.nodeId], kb));
   const reviews: ReviewRecord[] = [];
   for (const nodeId of [...new Set(nodeIds)]) {
     if (draftState.reviews.some((review) => review.nodeId === nodeId && review.triggerId === change.id)) continue;
@@ -474,7 +474,7 @@ function appendChangeReviews(
       nodeId,
       triggerType: "change",
       triggerId: change.id,
-      reason: referencedEvidence.some((evidence) => evidence.id === nodeId) ? "source observation changed" : "support depends on changed evidence",
+      reason: changedEvidence.some((evidence) => evidence.id === nodeId) ? "source observation changed" : "support depends on changed evidence",
       status: "open",
       createdBy: actor,
       createdAt
@@ -572,7 +572,6 @@ function applySourceTransition(
     availability: fetched.status,
     providerRevision: fetched.providerRevision,
     currentDigest: fetched.digest,
-    lastCheckedAt: context.createdAt,
     createdBy: freshExisting?.createdBy ?? context.actor,
     createdAt: freshExisting?.createdAt ?? context.createdAt
   };
@@ -708,6 +707,7 @@ function impactEntries(state: ProjectState, node: NodeRecord, kb?: string): Impa
   const queue: Array<{ readonly id: string; readonly path: string[] }> = [];
   const source = sourceForNode(state, node);
   if (node.kind === "source" && source !== undefined) {
+    queue.push({ id: node.id, path: [node.id] });
     for (const evidence of sourceEvidence(state, source, kb)) {
       const reason = evidence.fields?.observationId === source.currentObservationId ? "source observation retained" : "source observation changed";
       paths.set(evidence.id, [[node.id, evidence.id]]);

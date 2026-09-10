@@ -172,6 +172,28 @@ test then passed, and the complete validation file reported eight passing
 tests. Typecheck and the freshly built MCP/CLI regression also passed with ten
 tests.
 
+## Canonical lowercase record IDs: RED → GREEN
+
+The portability regression recorded a claim with the explicit lowercase UUID
+`aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa`, then submitted the same UUID in
+uppercase. Before the correction, request validation accepted the second ID;
+the runtime committed a second semantic record and projection publication
+failed on the case-insensitive filesystem with `PROJECTION_FAILED`. The
+focused public test also checks that the caller receives `INVALID_REQUEST`
+and that the durable revision and knowledge-base result remain unchanged.
+The observed red command was:
+
+```text
+npm run build && node --test test/validation.test.ts \
+  --test-name-pattern='uppercase explicit record IDs'
+```
+
+The minimum schema correction restricts an optional explicit `record.id` to a
+UUID whose spelling is already lowercase. Generated IDs continue to come from
+`randomUUID()` and are unaffected. The focused command then passed all 11
+selected validation tests, including the new regression. `npm run typecheck`
+and `git diff --check` also passed.
+
 ## Non-decision basis and final verification
 
 The public validation set also verifies that a claim with a valid existing

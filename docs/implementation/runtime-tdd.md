@@ -385,3 +385,48 @@ use the same narrow provider-failure mapping for an already identified source.
 The pinned Node v24.21.0 verification passed all 24 runtime tests, including
 the inaccessible-source regression, with 0 failures. `npm run typecheck` and
 `git diff --check` also passed.
+
+## Dependency review seed correction: RED → GREEN
+
+The first remaining source-maintenance regression captured evidence, recorded
+an independently accepted requirement as an artifact basis, and added an
+explicit `depends_on` relationship from the artifact to the evidence. The
+source change appeared in impact, but refresh returned no change reviews
+because review seeding required the evidence to be a direct justification
+premise. The focused public test failed with an empty review set after the
+existing 24 runtime tests passed.
+
+The minimum correction seeds change review propagation from every retained
+evidence node whose observation no longer matches the current source, then
+traverses declared support and dependency edges. This includes standalone old
+evidence and its explicit dependents while still excluding newly matching
+evidence. The focused runtime verification passed 25 tests with 0 failures.
+
+## Source-node impact correction: RED → GREEN
+
+The second regression attached an artifact's explicit `depends_on` relationship
+directly to the captured source node. Before the correction, a source impact
+query began its traversal at retained evidence, so it omitted the direct
+artifact path; refresh likewise omitted the artifact review. The focused test
+failed with only the retained evidence in the affected set.
+
+The minimum correction also traverses the source graph node itself while
+retaining paths through every retained evidence observation. Change review
+propagation traverses direct source dependents without reviewing the source
+node itself. The public test checks exact affected and review ID sets, the
+source-to-artifact path, and that freshly matching evidence is absent from the
+review set. The pinned Node v24.21.0 runtime suite now passes 26 tests with 0
+failures; typecheck and `git diff --check` remain green.
+
+## Source polling metadata cleanup: RED → GREEN
+
+The source lifecycle fixture then asserted that a captured semantic source
+record does not expose `lastCheckedAt`, since polling time is operational
+metadata and each durable observation already carries its own attribution.
+The assertion first failed because `capture_source` copied the request time
+onto the source record.
+
+The minimum cleanup removes that field from the durable `SourceRecord` type and
+from newly produced source snapshots. The focused runtime verification passed
+all 26 tests with 0 failures after the change; typecheck and
+`git diff --check` also passed.

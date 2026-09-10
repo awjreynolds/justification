@@ -1005,6 +1005,7 @@ test("refreshes changed evidence and exposes the exact ADR impact with durable r
     assert.equal(capturedData.observation.digest, initialDigest);
     assert.equal(capturedData.observation.observedText, initialText);
     assert.equal(capturedData.evidence.observationId, capturedData.observation.id);
+    assert.equal("lastCheckedAt" in capturedData.source, false);
 
     const claim = await executeOperation(root, {
       op: "record",
@@ -1021,6 +1022,14 @@ test("refreshes changed evidence and exposes the exact ADR impact with durable r
       conclusion: claimId,
       groups: [[capturedData.evidence.id]],
       rationale: "The retained benchmark observation supports the claim.",
+      actor: "human:author"
+    });
+    await executeOperation(root, {
+      op: "justify",
+      kb: "shared",
+      conclusion: claimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "A second declared support route converges on the same claim.",
       actor: "human:author"
     });
     const decision = await executeOperation(root, {
@@ -1098,6 +1107,9 @@ test("refreshes changed evidence and exposes the exact ADR impact with durable r
 
     const expectedReviewNodeIds = new Set([capturedData.evidence.id, claimId, decisionId, artifactId]);
     assert.deepEqual(new Set(refreshData.reviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(refreshData.reviews.length, expectedReviewNodeIds.size);
+    const reviewKeys = refreshData.reviews.map((review) => `${review.nodeId}\u0000${review.triggerId}`);
+    assert.equal(new Set(reviewKeys).size, reviewKeys.length);
     assert.equal(refreshData.reviews.every((review) => review.triggerType === "change" && review.triggerId === change.id && review.status === "open"), true);
 
     const inspected = await executeOperation(root, { op: "inspect_source", sourceId: capturedData.source.id, kb: "shared" });
@@ -1488,6 +1500,151 @@ test("records inaccessible source availability as a durable review transition", 
     assert.equal((claimWhy.data as { support: { status: string } }).support.status, "pending");
   } finally {
     await chmod(sourceDirectory, 0o755).catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("reviews retained evidence and explicit artifact dependencies after a source change", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-dependency-review-"));
+  try {
+    await initializeProject(root);
+    const sourceLocator = "research/source.txt";
+    await mkdir(join(root, "research"), { recursive: true });
+    await writeFile(join(root, sourceLocator), "research result: initial\n", "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as { source: { id: string }; evidence: { id: string } };
+
+    const requirement = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "requirement",
+      title: "The artifact must retain an accepted basis",
+      body: "The independent requirement is accepted.",
+      fields: { accepted: true },
+      actor: "human:reviewer"
+    });
+    const requirementId = (requirement.data as { node: { id: string } }).node.id;
+    const artifact = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "artifact",
+      title: "Research artifact",
+      body: "The artifact depends on the retained research evidence.",
+      basis: [requirementId],
+      links: [{ to: capturedData.evidence.id, type: "depends_on", rationale: "The artifact consumes the retained observation." }],
+      actor: "human:reviewer"
+    });
+    const artifactId = (artifact.data as { node: { id: string } }).node.id;
+
+    await writeFile(join(root, sourceLocator), "research result: changed\n", "utf8");
+    const refreshed = await executeOperation(root, {
+      op: "refresh",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    const refreshData = refreshed.data as {
+      changes: Array<{ id: string }>;
+      reviews: Array<{ nodeId: string; triggerId: string; status: string }>;
+    };
+    const change = refreshData.changes[0];
+    assert.ok(change);
+    const expectedReviewNodeIds = new Set([capturedData.evidence.id, artifactId]);
+    const changeReviews = refreshData.reviews.filter((review) => review.triggerId === change.id);
+    assert.deepEqual(new Set(changeReviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(changeReviews.length, expectedReviewNodeIds.size);
+    assert.equal(changeReviews.every((review) => review.status === "open"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("includes direct source dependencies in impact and change reviews", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-node-review-"));
+  try {
+    await initializeProject(root);
+    const sourceLocator = "research/source.txt";
+    await mkdir(join(root, "research"), { recursive: true });
+    await writeFile(join(root, sourceLocator), "research result: initial\n", "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as { source: { id: string; nodeId: string }; observation: { id: string }; evidence: { id: string } };
+
+    const requirement = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "requirement",
+      title: "The artifact must retain an accepted basis",
+      body: "The independent requirement is accepted.",
+      fields: { accepted: true },
+      actor: "human:reviewer"
+    });
+    const requirementId = (requirement.data as { node: { id: string } }).node.id;
+    const artifact = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "artifact",
+      title: "Research artifact",
+      body: "The artifact depends directly on the source node.",
+      basis: [requirementId],
+      links: [{ to: capturedData.source.nodeId, type: "depends_on", rationale: "The artifact consumes this source." }],
+      actor: "human:reviewer"
+    });
+    const artifactId = (artifact.data as { node: { id: string } }).node.id;
+
+    await writeFile(join(root, sourceLocator), "research result: changed\n", "utf8");
+    const refreshed = await executeOperation(root, {
+      op: "refresh",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh"
+    });
+    const refreshData = refreshed.data as {
+      changes: Array<{ id: string }>;
+      reviews: Array<{ nodeId: string; triggerId: string; status: string }>;
+    };
+    const change = refreshData.changes[0];
+    assert.ok(change);
+    const inspected = await executeOperation(root, {
+      op: "inspect_source",
+      sourceId: capturedData.source.id,
+      kb: "shared"
+    });
+    const inspectedData = inspected.data as {
+      observations: Array<{ id: string }>;
+      evidence: Array<{ id: string; observationId: string }>;
+    };
+    const latestObservation = inspectedData.observations.find((observation) => observation.id !== capturedData.observation.id);
+    assert.ok(latestObservation);
+    const latestEvidence = inspectedData.evidence.find((evidence) => evidence.observationId === latestObservation.id);
+    assert.ok(latestEvidence);
+
+    const impact = await executeOperation(root, {
+      op: "impact",
+      nodeId: capturedData.source.nodeId,
+      kb: "shared"
+    });
+    const impactData = impact.data as { affected: Array<{ node: { id: string }; paths: string[][] }> };
+    const expectedAffectedIds = new Set([capturedData.evidence.id, latestEvidence.id, artifactId]);
+    assert.deepEqual(new Set(impactData.affected.map((entry) => entry.node.id)), expectedAffectedIds);
+    const artifactImpact = impactData.affected.find((entry) => entry.node.id === artifactId);
+    assert.ok(artifactImpact);
+    assert.deepEqual(artifactImpact.paths, [[capturedData.source.nodeId, artifactId]]);
+
+    const changeReviews = refreshData.reviews.filter((review) => review.triggerId === change.id);
+    const expectedReviewNodeIds = new Set([capturedData.evidence.id, artifactId]);
+    assert.deepEqual(new Set(changeReviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(changeReviews.length, expectedReviewNodeIds.size);
+    assert.equal(changeReviews.some((review) => review.nodeId === latestEvidence.id), false);
+    assert.equal(changeReviews.every((review) => review.status === "open"), true);
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
