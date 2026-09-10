@@ -33,7 +33,15 @@ they are gone. A fresh client/server pair rebuilds both projects from native
 history; the current and historical `why` responses and the review response
 deep-compare with the pre-restart values.
 
-The exact focused verification was:
+An earlier working-tree run reported a passing typecheck, build and focused test
+before the final `impact` assertion was added. An isolated archive check of the
+committed `2e06bb2` then found a typecheck error at that assertion: the response
+annotation omitted the asserted evidence node's `kind` field. That result means
+the earlier pass did not cover the committed final assertion. The correction
+only widens the test response type; it does not change runtime behavior or test
+semantics.
+
+The final focused verification was:
 
 ```sh
 npm run typecheck
@@ -42,8 +50,9 @@ PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
   node --test test/mcp-maintenance.test.ts
 ```
 
-Observed result: typecheck and build exited `0`; the maintenance test exited
-`0` with `1` passing test, `0` failures and `0` skips. The test is included in
+Observed result after the correction: typecheck and build exited `0`; the
+maintenance test exited `0` with `1` passing test, `0` failures and `0` skips.
+The test is included in
 the package's `test/*.test.ts` glob for the next full-suite run. The temporary
 projects, server processes and disposable history are cleaned up by the test.
 

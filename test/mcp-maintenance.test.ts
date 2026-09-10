@@ -384,7 +384,7 @@ test("current MCP SDK preserves maintenance state across refresh and rebuild", a
       revision: number;
       data: {
         node: { id: string };
-        affected: Array<{ node: { id: string }; paths: string[][]; reasons: string[] }>;
+        affected: Array<{ node: { id: string; kind: string }; paths: string[][]; reasons: string[] }>;
         changes: Array<{ id: string }>;
         reviews: Array<{ nodeId: string; triggerId: string; status: string }>;
       };
