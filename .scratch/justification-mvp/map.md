@@ -351,7 +351,8 @@ case-insensitive path collisions before completing scope acceptance.
   test passes through the existing atomic support record with
   `dependencyKind: "justification_premise"`; no diagnostic-only failure was
   introduced. The option and source/evidence fixtures pass in the seven-test
-  promotion run.
+  promotion run; the later scoped-capture regression brings the focused run
+  to eight tests.
 - Open child contradictions involving a candidate return `REVIEW_REQUIRED`
   until an explicit resolution is recorded. A resolved child contradiction is
   retained in the child conflict index and its existing review remains
@@ -367,6 +368,15 @@ case-insensitive path collisions before completing scope acceptance.
   do not expose child rationale or closure history. The combined promotion,
   knowledge-action and bounded-query verification is 17 passing tests with
   zero failures.
+- The final Spec review reproduced a capture leak after promoting a source
+  while its evidence remained child-owned: unchanged shared and sibling
+  `capture_source` calls returned that child evidence even though scoped
+  evidence inspection omitted it. The public regression first observed the
+  child descriptor (`7 passing, 1 failing`); the minimum correction filters
+  returned evidence by the effective capture KB on both fast and transaction
+  paths. Shared and sibling unchanged captures now preserve the same revision
+  and omit evidence until its separate promotion; the focused promotion run
+  passes 8 tests with typecheck and whitespace checks green.
 
 ## Out of scope
 

@@ -849,3 +849,162 @@ test("requires a source to be shared before promoting its captured evidence", as
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("scopes unchanged captures until evidence is promoted separately", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-promotion-capture-scope-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, {
+      op: "create_kb",
+      id: "adr",
+      title: "Architecture decision",
+      actor: "human:scope",
+      at: "2026-09-11T19:00:00Z"
+    });
+    await executeOperation(root, {
+      op: "create_kb",
+      id: "research",
+      title: "Research",
+      actor: "human:scope",
+      at: "2026-09-11T19:00:01Z"
+    });
+    const sourcePath = join(root, "constraints.md");
+    await writeFile(sourcePath, "The captured constraint.\n", "utf8");
+
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "adr",
+      locator: "constraints.md",
+      actor: "human:researcher",
+      at: "2026-09-11T19:00:02Z"
+    });
+    const capturedData = captured.data as {
+      source: { id: string; nodeId: string; kb: string };
+      observation: { id: string };
+      evidence: { id: string; kb: string; sourceId: string };
+    };
+    assert.equal(capturedData.source.kb, "adr");
+    assert.equal(capturedData.evidence.kb, "adr");
+
+    const promotedSource = await executeOperation(root, {
+      op: "promote",
+      nodeId: capturedData.source.nodeId,
+      actor: "human:promoter",
+      at: "2026-09-11T19:00:03Z",
+      expectedRevision: captured.revision
+    });
+    assert.equal((promotedSource.data as { node: { id: string; kb: string } }).node.id, capturedData.source.nodeId);
+    assert.equal((promotedSource.data as { node: { kb: string } }).node.kb, "shared");
+
+    const sharedCapture = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: "constraints.md",
+      actor: "human:shared-reader",
+      at: "2026-09-11T19:00:04Z",
+      expectedRevision: promotedSource.revision
+    });
+    const sharedCaptureData = sharedCapture.data as {
+      source: { id: string; kb: string };
+      observation: { id: string };
+      evidence: unknown;
+      changed: boolean;
+      committed: boolean;
+    };
+    assert.equal(sharedCapture.revision, promotedSource.revision);
+    assert.equal(sharedCaptureData.source.id, capturedData.source.id);
+    assert.equal(sharedCaptureData.source.kb, "shared");
+    assert.equal(sharedCaptureData.observation.id, capturedData.observation.id);
+    assert.equal(sharedCaptureData.evidence, null);
+    assert.equal(sharedCaptureData.changed, false);
+    assert.equal(sharedCaptureData.committed, false);
+
+    const siblingCapture = await executeOperation(root, {
+      op: "capture_source",
+      kb: "research",
+      locator: "constraints.md",
+      actor: "human:sibling-reader",
+      at: "2026-09-11T19:00:05Z",
+      expectedRevision: sharedCapture.revision
+    });
+    const siblingCaptureData = siblingCapture.data as {
+      source: { id: string; kb: string };
+      observation: { id: string };
+      evidence: unknown;
+      changed: boolean;
+      committed: boolean;
+    };
+    assert.equal(siblingCapture.revision, sharedCapture.revision);
+    assert.equal(siblingCaptureData.source.id, capturedData.source.id);
+    assert.equal(siblingCaptureData.source.kb, "shared");
+    assert.equal(siblingCaptureData.observation.id, capturedData.observation.id);
+    assert.equal(siblingCaptureData.evidence, null);
+    assert.equal(siblingCaptureData.changed, false);
+    assert.equal(siblingCaptureData.committed, false);
+
+    const sharedEvidenceBeforePromotion = await executeOperation(root, {
+      op: "evidence",
+      sourceId: capturedData.source.id,
+      kb: "shared"
+    });
+    const siblingEvidenceBeforePromotion = await executeOperation(root, {
+      op: "evidence",
+      sourceId: capturedData.source.id,
+      kb: "research"
+    });
+    assert.deepEqual((sharedEvidenceBeforePromotion.data as { evidence: unknown[] }).evidence, []);
+    assert.deepEqual((siblingEvidenceBeforePromotion.data as { evidence: unknown[] }).evidence, []);
+
+    await writeFile(sourcePath, "The changed constraint.\n", "utf8");
+    const changedCapture = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: "constraints.md",
+      actor: "human:shared-reader",
+      at: "2026-09-11T19:00:06Z",
+      expectedRevision: siblingCapture.revision
+    });
+    const changedCaptureData = changedCapture.data as {
+      evidence: { id: string; kb: string };
+      changed: boolean;
+      committed: boolean;
+    };
+    assert.equal(changedCapture.revision, siblingCapture.revision + 1);
+    assert.equal(changedCaptureData.changed, true);
+    assert.equal(changedCaptureData.committed, true);
+    assert.notEqual(changedCaptureData.evidence.id, capturedData.evidence.id);
+    assert.equal(changedCaptureData.evidence.kb, "shared");
+
+    const promotedEvidence = await executeOperation(root, {
+      op: "promote",
+      nodeId: capturedData.evidence.id,
+      actor: "human:promoter",
+      at: "2026-09-11T19:00:07Z",
+      expectedRevision: changedCapture.revision
+    });
+    const promotedEvidenceData = promotedEvidence.data as { node: { id: string; kb: string } };
+    assert.equal(promotedEvidenceData.node.id, capturedData.evidence.id);
+    assert.equal(promotedEvidenceData.node.kb, "shared");
+
+    const unchangedAfterPromotion = await executeOperation(root, {
+      op: "capture_source",
+      kb: "research",
+      locator: "constraints.md",
+      actor: "human:sibling-reader",
+      at: "2026-09-11T19:00:08Z",
+      expectedRevision: promotedEvidence.revision
+    });
+    const unchangedAfterPromotionData = unchangedAfterPromotion.data as {
+      evidence: { id: string; kb: string };
+      changed: boolean;
+      committed: boolean;
+    };
+    assert.equal(unchangedAfterPromotion.revision, promotedEvidence.revision);
+    assert.equal(unchangedAfterPromotionData.evidence.id, changedCaptureData.evidence.id);
+    assert.equal(unchangedAfterPromotionData.evidence.kb, "shared");
+    assert.equal(unchangedAfterPromotionData.changed, false);
+    assert.equal(unchangedAfterPromotionData.committed, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

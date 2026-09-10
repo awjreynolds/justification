@@ -91,7 +91,7 @@ Captured evidence also retains ownership of its source. Promoting evidence
 before its source is shared returns an actionable
 `SCOPE_VIOLATION` with `dependencyKind: "source_provenance"`; promoting the
 source first then permits the evidence move. The public provenance fixture
-verifies both orderings and immutable IDs in the seven-test promotion run.
+verifies both orderings and immutable IDs in the eight-test promotion run.
 
 ## Fourth cycle: conflicts and explicit retry
 
@@ -126,8 +126,42 @@ for the candidate in the promotion conflict plan. The blocked retry now keeps
 the exact review ID, returns the same revision with `committed: false`, and
 leaves the node in its child KB. Closing that review and retrying with the list
 still omitted then promotes successfully. The focused promotion run remains
-green (`7 tests, 7 pass, 0 failures`).
+green (`7 tests, 7 pass, 0 failures`) at this stage.
 
-The current focused promotion run passes (`7 tests, 7 pass, 0 failures`), and
-the combined promotion, knowledge-action and bounded-query run passes (`17
-tests, 17 pass, 0 failures`).
+## Sixth cycle: scoped unchanged captures
+
+The final Spec review reproduced a leak after promoting a source while its
+retained evidence remained child-owned. An unchanged `capture_source` request
+in `shared` returned the full child evidence node, even though the scoped
+`evidence` query omitted it. The public regression extends the provenance
+fixture with both a shared and sibling unchanged capture between source and
+evidence promotion. Each must return the shared source and retained
+observation, no evidence, `changed: false`, `committed: false`, and the same
+revision. The original evidence then promotes separately. A subsequent changed
+capture exercises the transaction path and returns new shared evidence; the
+post-promotion unchanged sibling capture remains a no-op and returns that
+shared evidence.
+
+The deliberate RED run used the focused command:
+
+```text
+npm run build && node --test test/promotion.test.ts
+```
+
+It reached the shared capture and returned the child evidence object instead
+of `null` (`7 passing, 1 failing`). The minimum GREEN correction filters the
+fast-path and transaction-path capture result by the effective request KB
+without changing source identity or promoting evidence implicitly. The
+focused verification passed with typecheck and whitespace validation:
+
+```text
+npm run typecheck && node --test test/promotion.test.ts && git diff --check
+```
+
+The result is green (`8 tests, 8 pass, 0 failures`); shared and sibling
+unchanged captures preserve the no-op revision, and the separate evidence
+promotion still commits independently.
+
+The final focused promotion run passes (`8 tests, 8 pass, 0 failures`). The
+parent separately ran typecheck and the complete suite after this correction:
+101 tests passed with no failures.

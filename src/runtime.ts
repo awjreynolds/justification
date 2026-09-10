@@ -368,6 +368,11 @@ function evidenceDescriptor(evidence: NodeRecord | undefined): (NodeRecord & { s
   return { ...evidence, sourceId: evidence.fields.sourceId, observationId: evidence.fields.observationId };
 }
 
+function scopedEvidenceDescriptor(evidence: NodeRecord | null | undefined, kb: string): (NodeRecord & { sourceId: string; observationId: string }) | null {
+  if (evidence === null || evidence === undefined || (evidence.kb !== "shared" && evidence.kb !== kb)) return null;
+  return evidenceDescriptor(evidence);
+}
+
 function visibleSource(state: ProjectState, source: SourceRecord, kb?: string): SourceRecord {
   if (kb !== undefined) {
     findKb(state, kb);
@@ -1007,7 +1012,7 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
     const evidence = observation === undefined ? undefined : evidenceNodeForObservation(state, observation.id);
     return {
       revision: loaded.revision.revision,
-      data: { source: existing, observation, evidence: evidenceDescriptor(evidence), changed: false, committed: false }
+      data: { source: existing, observation, evidence: scopedEvidenceDescriptor(evidence, kb), changed: false, committed: false }
     };
   }
   const baseline = request.expectedRevision ?? loaded.revision.revision;
@@ -1038,6 +1043,7 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
     revision: result.revision,
     data: {
       ...result.data,
+      evidence: scopedEvidenceDescriptor(result.data.evidence, kb),
       reviews: reviewsVisibleInKb(state, result.data.reviews, request.kb ?? "shared")
     }
   };
