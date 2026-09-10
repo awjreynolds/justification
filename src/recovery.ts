@@ -113,7 +113,8 @@ export async function handleRebuild(root: string, request: RebuildRequest): Prom
     const index = disposableIndex(current);
     const projection = await writeProjection(root, current.state, {
       generatedAt: current.committedAt,
-      allowMissing: true
+      allowMissing: true,
+      ignoreInvalidManifest: true
     });
     const disposable = await writeDisposableIndex(root, index);
     return {

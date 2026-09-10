@@ -3,8 +3,8 @@ import { join, relative, sep } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 
 import { JUSTIFICATION_PROFILE, canonicalJson, sha256 } from "./domain.ts";
-import type { NodeRecord, ProjectState } from "./domain.ts";
-import { withProjectLock } from "./storage.ts";
+import type { HistoryRevision, NodeRecord, ProjectState } from "./domain.ts";
+import { historyRevisions, withProjectLock } from "./storage.ts";
 import { buildSupportTree } from "./support-tree.ts";
 import { supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
@@ -28,6 +28,7 @@ export type ProjectionWriteOptions = {
   readonly kb?: string;
   readonly repair?: boolean;
   readonly allowMissing?: boolean;
+  readonly ignoreInvalidManifest?: boolean;
   readonly generatedAt?: string;
 };
 
@@ -202,16 +203,28 @@ async function ensureProjectionRoots(root: string): Promise<void> {
   await ensureSafeDirectory(join(root, ".justification"));
 }
 
-async function readManifest(root: string): Promise<Record<string, string> | undefined> {
+async function readManifest(root: string, ignoreInvalidManifest: boolean): Promise<Record<string, string> | undefined> {
   try {
     const manifestPath = join(root, ...MANIFEST_PATH);
     const info = await lstat(manifestPath);
     if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError("projection manifest must be a regular file");
-    const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
-    if (!isRecord(parsed) || !isRecord(parsed.files)) throw new ProjectionError("projection manifest is malformed");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(await readFile(manifestPath, "utf8"));
+    } catch (error) {
+      if (ignoreInvalidManifest && error instanceof SyntaxError) return undefined;
+      throw new ProjectionError("projection manifest is malformed", { cause: error });
+    }
+    if (!isRecord(parsed) || !isRecord(parsed.files)) {
+      if (ignoreInvalidManifest) return undefined;
+      throw new ProjectionError("projection manifest is malformed");
+    }
     const files: Record<string, string> = {};
     for (const [key, value] of Object.entries(parsed.files)) {
-      if (typeof value !== "string") throw new ProjectionError("projection manifest contains an invalid digest");
+      if (typeof value !== "string") {
+        if (ignoreInvalidManifest) return undefined;
+        throw new ProjectionError("projection manifest contains an invalid digest");
+      }
       files[key] = value;
     }
     return files;
@@ -222,26 +235,57 @@ async function readManifest(root: string): Promise<Record<string, string> | unde
   }
 }
 
-async function detectDrift(root: string, expectedFiles: Record<string, string>, allowMissing: boolean): Promise<void> {
-  for (const [path, expected] of Object.entries(expectedFiles)) {
+type ProjectionOwnership = Readonly<Record<string, ReadonlySet<string>>>;
+
+function historicalOwnership(revisions: readonly HistoryRevision[], currentDocuments: readonly ProjectionDocument[]): {
+  readonly paths: Set<string>;
+  readonly hashes: Record<string, Set<string>>;
+} {
+  const paths = new Set<string>();
+  const hashes: Record<string, Set<string>> = {};
+  const add = (document: ProjectionDocument): void => {
+    const path = document.relativePath.replaceAll("\\", "/");
+    paths.add(path);
+    (hashes[path] ??= new Set()).add(sha256(document.content));
+  };
+  for (const revision of revisions) {
+    for (const document of projectDocuments(revision.state, revision.committedAt)) add(document);
+  }
+  for (const document of currentDocuments) add(document);
+  return { paths, hashes };
+}
+
+async function detectDrift(
+  root: string,
+  ownership: ProjectionOwnership,
+  previous: Record<string, string> | undefined,
+  allowMissing: boolean
+): Promise<Record<string, string>> {
+  const existing: Record<string, string> = {};
+  for (const [path, accepted] of Object.entries(ownership)) {
     try {
       const info = await lstat(join(root, path));
       if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`generated projection is not a regular file: ${path}`);
       const actual = sha256(await readFile(join(root, path)));
-      if (actual !== expected) throw new ProjectionError(`generated projection was modified: ${path}`);
+      if (!accepted.has(actual)) throw new ProjectionError(`generated projection was modified: ${path}`);
+      existing[path] = actual;
     } catch (error) {
       if (error instanceof ProjectionError) throw error;
-      if ((error as NodeJS.ErrnoException).code === "ENOENT" && allowMissing) continue;
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new ProjectionError(`generated projection is missing: ${path}`);
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        if (previous !== undefined && Object.prototype.hasOwnProperty.call(previous, path) && !allowMissing) {
+          throw new ProjectionError(`generated projection is missing: ${path}`);
+        }
+        continue;
+      }
       throw error;
     }
   }
+  return existing;
 }
 
 async function preflightTargets(
   root: string,
   documents: readonly ProjectionDocument[],
-  expectedFiles: Record<string, string>,
   repair: boolean
 ): Promise<void> {
   for (const document of documents) {
@@ -251,10 +295,6 @@ async function preflightTargets(
       const info = await lstat(absolute);
       if (info.isSymbolicLink() || !info.isFile()) throw new ProjectionError(`projection destination is not a regular file: ${path}`);
       if (repair) continue;
-      const expected = expectedFiles[path];
-      if (expected === undefined) throw new ProjectionError(`projection destination is not a known generated path: ${path}`);
-      const actual = sha256(await readFile(absolute));
-      if (actual !== expected) throw new ProjectionError(`generated projection was modified: ${path}`);
     } catch (error) {
       if (error instanceof ProjectionError) throw error;
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new ProjectionError(`cannot inspect projection destination: ${path}`, { cause: error });
@@ -265,31 +305,25 @@ async function preflightTargets(
 export async function writeProjection(root: string, state: ProjectState, options: ProjectionWriteOptions = {}): Promise<ProjectionResult> {
   return withProjectLock(root, async () => {
     await ensureProjectionRoots(root);
-    const previous = await readManifest(root);
+    const previous = await readManifest(root, options.ignoreInvalidManifest === true);
     const generatedAt = options.generatedAt ?? new Date().toISOString();
     const allDocuments = projectDocuments(state, generatedAt);
     const documents = options.kb === undefined ? allDocuments : projectDocuments(state, generatedAt, options.kb);
-    const currentOwnership: Record<string, string> = {};
-    for (const document of allDocuments) currentOwnership[document.relativePath.replaceAll("\\", "/")] = sha256(document.content);
+    const revisions = await historyRevisions(root);
+    const derived = historicalOwnership(revisions, allDocuments);
 
     // Manifest entries are disposable and untrusted. Preserve only paths that
-    // are independently derivable from the validated semantic state. When the
-    // manifest is missing, current revision state plus its committed timestamp
-    // provides the historical generated bytes used for ownership checks.
-    const ownedPrevious: Record<string, string> = {};
-    if (previous !== undefined) {
-      for (const [path, digest] of Object.entries(previous)) {
-        if (Object.prototype.hasOwnProperty.call(currentOwnership, path)) ownedPrevious[path] = digest;
-      }
-    }
-    if (previous && !options.repair) await detectDrift(root, ownedPrevious, options.allowMissing === true);
-    const expectedTargets: Record<string, string> = {};
-    for (const document of documents) {
-      const path = document.relativePath.replaceAll("\\", "/");
-      expectedTargets[path] = ownedPrevious[path] ?? currentOwnership[path] ?? sha256(document.content);
-    }
-    await preflightTargets(root, documents, expectedTargets, options.repair === true);
-    const files: Record<string, string> = { ...ownedPrevious };
+    // are independently derivable from every validated historical revision.
+    // Their recorded committed timestamps are part of each generated hash, so
+    // a projection from an older semantic revision remains accepted after the
+    // disposable manifest is lost. Manifest digests are never used as proof of
+    // ownership.
+    const ownership = derived.hashes;
+    const existing = options.repair
+      ? {}
+      : await detectDrift(root, ownership, previous, options.allowMissing === true);
+    await preflightTargets(root, documents, options.repair === true);
+    const files: Record<string, string> = { ...existing };
     const writtenFiles: string[] = [];
     for (const document of documents) {
       const absolute = join(root, document.relativePath);
