@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 
+import { runCli } from "../dist/cli.js";
 import { initializeProject } from "../src/index.ts";
 
 const execFile = promisify(execFileCallback);
@@ -229,7 +230,43 @@ test("the CLI run command dispatches a valid operation and emits its JSON respon
   }
 });
 
-test("the CLI run command decodes UTF-8 split across stdin chunks", async () => {
+test("runCli decodes UTF-8 split across supplied stdin chunks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-cli-run-api-utf8-"));
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+
+  try {
+    await initializeProject(root);
+    const request = Buffer.from(JSON.stringify({ op: "knowledge_bases", kb: "Café" }), "utf8");
+    const accent = Buffer.from("é", "utf8");
+    const accentOffset = request.indexOf(accent);
+    assert.ok(accentOffset >= 0);
+    const splitOffset = accentOffset + 1;
+    const stdin = (async function* (): AsyncGenerator<Uint8Array> {
+      yield request.subarray(0, splitOffset);
+      yield request.subarray(splitOffset);
+    })();
+
+    const status = await runCli(["run", root, "-"], {
+      stdin,
+      stdout: { write: (chunk) => stdout.push(chunk) },
+      stderr: { write: (chunk) => stderr.push(chunk) }
+    });
+
+    assert.equal(status, 1);
+    assert.equal(stdout.join(""), "");
+    assert.deepEqual(JSON.parse(stderr.join("")), {
+      error: {
+        code: "NOT_FOUND",
+        message: "knowledge base not found: Café"
+      }
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the CLI process smoke decodes UTF-8 split across stdin chunks", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-cli-run-utf8-"));
   const cli = join(process.cwd(), "dist", "cli.js");
 

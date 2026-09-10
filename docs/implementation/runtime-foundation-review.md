@@ -19,4 +19,14 @@ Three actionable findings:
 - **P1 — Invalid generated frontmatter.** The serializer trimmed the YAML's final newline and concatenated the closing delimiter onto the last value. Published documents must place that delimiter on its own line and be tested using an independent parser.
 - **P2 — Incomplete domain-reference validation.** The history loader checked object shapes but not referenced source/node/KB identities. Digest integrity does not establish semantic validity. Load and commit must validate domain references.
 
-All five findings were accepted. Luna was assigned sequential regression fixes and the smallest public export behavior needed to verify compiled Markdown. The TDD process deviation remains part of the record; repair evidence and re-review follow in this document when complete.
+All five findings were accepted. Luna was assigned sequential regression fixes and the smallest public export behavior needed to verify compiled Markdown.
+
+## Repair and re-review
+
+At `65b1dab`, the history guards, delimiter/KB-index corrections and common reference validator were in place. Independent execution passed 28 tests, build and typecheck. Re-review confirmed the fixes, while finding a first-export collision that could overwrite human-authored `kb/shared/index.md`, plus two weak fixtures: export had only tested the root index, and the missing-premise fixture also had a missing conclusion.
+
+At `f102b89`, publication preflights every generated destination before writing and rejects unknown existing files. The new regression observed the overwrite before the fix, then verified preserved human bytes and no partial publication. Export now exercises a retained node through an independent frontmatter parser. Reference fixtures isolate the intended invalid edge with valid neighboring data.
+
+The final bounded Spec re-review through `f102b89` reported no remaining findings in these corrections and approved moving to the next vertical slice. The Standards re-review found no new hard violations, accepted the committed dependency evidence and required the fixture improvements above. The original pre-test foundation deviation remains acknowledged; later evidence does not rewrite that history.
+
+Full reasoning projections, cache-loss drift handling and additional graph operations are subsequent slices, not claims of this foundation review.

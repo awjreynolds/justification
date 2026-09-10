@@ -16,6 +16,7 @@ import type { RuntimeRequest } from "./index.js";
 
 export interface CliIO {
   readonly cwd?: string;
+  readonly stdin?: AsyncIterable<string | Uint8Array>;
   readonly stdout?: { write(chunk: string): void };
   readonly stderr?: { write(chunk: string): void };
 }
@@ -60,7 +61,7 @@ export async function runCli(
 
       let requestText: string;
       try {
-        requestText = await readRequestText(arguments_[1]);
+        requestText = await readRequestText(arguments_[1], io.stdin ?? process.stdin);
       } catch (error) {
         return writeError(
           stderr,
@@ -112,14 +113,14 @@ export async function runCli(
   }
 }
 
-async function readRequestText(path: string): Promise<string> {
+async function readRequestText(path: string, stdin: AsyncIterable<string | Uint8Array>): Promise<string> {
   if (path !== "-") {
     return readFile(path, "utf8");
   }
 
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
+  for await (const chunk of stdin) {
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : Buffer.from(chunk));
   }
   return Buffer.concat(chunks).toString("utf8");
 }

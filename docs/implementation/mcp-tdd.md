@@ -72,9 +72,9 @@ run; they did not create additional test cases.
 
 ## Sequential follow-up fixes
 
-The next TDD cycle added one stdin behavior: a JSON request containing `Café`
-was sent to the CLI in two writes, with the second byte of `é` delayed until
-the first byte had been read. The red command was:
+The next TDD cycle added one process-level stdin behavior: a JSON request
+containing `Café` was sent to the CLI in two writes, with the second byte of
+`é` delayed by 250 ms after the first write. The red command was:
 
 ```text
 npm run build && /private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp.test.ts
@@ -84,7 +84,28 @@ It exited `1`: eight tests ran, seven passed and the new test failed because
 the CLI produced `knowledge base not found: Caf��` while the independent
 expected message was `knowledge base not found: Café`. The minimum fix kept
 stdin chunks as buffers until concatenation and one final UTF-8 decode. The
-same command then exited `0` with eight passing tests.
+same command then exited `0` with eight passing tests. Because this smoke test
+depends on process startup and scheduling to preserve the delayed read, the
+250 ms red result is observational evidence rather than a deterministic TDD
+failure.
+
+The deterministic regression now invokes the public `runCli` export from the
+compiled CLI with a supplied `CliIO.stdin` async iterable. It yields the same
+request as two `Uint8Array` chunks split inside the UTF-8 encoding of `é`, then
+asserts the public exit status and `NOT_FOUND` error containing the independent
+expected value `Café`. With the buffer-preserving decoder restored, this focused
+command exited `0` with one passing test:
+
+```text
+npm run build
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test --test-name-pattern='runCli decodes UTF-8 split across supplied stdin chunks' test/mcp.test.ts
+```
+
+As a sensitivity check, temporarily replacing the implementation with the old
+per-chunk UTF-8 decoding made that same focused test fail deterministically:
+the actual message contained `Caf��` while the expected message contained
+`Café`. The buffer-preserving implementation was restored before the final
+verification; this sensitivity check is not presented as a historical red run.
 
 The following cycle added a meaningful MCP repair scenario: export a project,
 modify its generated `kb/index.md`, then call `export` with `repair: true` and
@@ -100,13 +121,13 @@ The client cleanup changes moved `close()` into `finally` blocks so a failed
 connect or assertion still closes a client, and the `create_kb` test now sends
 the fixed timestamp `2026-01-01T00:00:00.000Z` and checks that exact independent
 value. These quality changes had no separate red run. The final focused
-verification was:
+verification after these changes was:
 
 ```text
 npm run typecheck && npm run build && /private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp.test.ts
 ```
 
-It exited `0`; typecheck and build passed, and all nine MCP/CLI tests passed.
+It exited `0`; typecheck and build passed, and all ten MCP/CLI tests passed.
 
 ## Regression and typecheck evidence
 
@@ -142,8 +163,9 @@ npm run typecheck && npm run test
 ```
 
 It exited `0`: typecheck passed, the build passed, and the full suite reported
-`24` tests passed, `0` failed, `0` skipped. The passing suite included all
-seven MCP/CLI tests, the runtime symlink guard, and the export check.
+`24` tests passed, `0` failed, `0` skipped. The passing suite included the
+MCP/CLI tests present at that point, the runtime symlink guard, and the export
+check.
 
 ## Deferred production coverage
 
