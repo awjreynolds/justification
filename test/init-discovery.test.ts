@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { test } from "node:test";
@@ -29,6 +29,45 @@ test("initializing an empty project makes its shared knowledge base discoverable
       }
     });
     assert.equal((await stat(join(canonicalRoot, "kb", "shared"))).isDirectory(), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("initialization gives a whitespace-only directory a reopenable display name", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "justification-whitespace-name-"));
+  const root = join(parent, "   ");
+
+  try {
+    const initialized = await initializeProject(root);
+    const discovered = await discoverProjects([root]);
+
+    assert.equal(initialized.name, "Untitled project");
+    assert.deepEqual(discovered, [initialized]);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("initialization rejects a dangling project descriptor link before creating project structure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-dangling-descriptor-"));
+  const descriptorPath = join(root, "justification.json");
+
+  try {
+    await symlink(join(root, "metadata-that-does-not-exist.json"), descriptorPath);
+
+    await assert.rejects(
+      initializeProject(root),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "MALFORMED_METADATA");
+        return true;
+      }
+    );
+
+    await assert.rejects(stat(join(root, "kb")), (error: unknown) => {
+      assert.equal((error as { code?: string }).code, "ENOENT");
+      return true;
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

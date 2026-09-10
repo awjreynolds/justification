@@ -32,9 +32,34 @@ Subsequent behavior was added one test at a time:
 | CLI initialization | Missing `dist/cli.js` | JSON descriptor from the process CLI |
 | Missing discovery root | Expected `INVALID_ROOT`, received filesystem `ENOENT` | Typed `INVALID_ROOT` |
 
+## Review fixes
+
 The repeatability, explicit-scope, CLI `projects`, and invalid-request checks
-were added as public regression tests and passed with the corresponding
-minimal runtime/CLI paths already in place.
+were added after the initial implementation and passed immediately. They are
+retained as public regression tests; no historical red result is claimed for
+those tests.
+
+Two review findings then followed the same red/green loop:
+
+| Finding | Actual red result | Green result |
+| --- | --- | --- |
+| Whitespace-only directory name | Reopen failed with `ProjectError` code `MALFORMED_METADATA` | Initialization stores the valid fallback name `Untitled project`; init followed by discovery succeeds |
+| Dangling `justification.json` symlink | Initialization reached raw filesystem `EEXIST` after creating `kb/shared` | `lstat` distinguishes the existing broken entry, returns `MALFORMED_METADATA`, and leaves `kb` absent |
+
+The observed command output for the review fixes was:
+
+```text
+red (whitespace name): Error [ProjectError]: justification.json has invalid project fields
+green: ✔ initialization gives a whitespace-only directory a reopenable display name
+
+red (dangling descriptor): actual 'EEXIST', expected 'MALFORMED_METADATA'
+green: ✔ initialization rejects a dangling project descriptor link before creating project structure
+```
+
+The requested standards cleanups did not need new behavior tests: the existing
+checks passed after adding the Node engine declaration, replacing shell
+`chmod` with a Node filesystem operation, and removing the redundant
+strip-types flag from the Node 24 test command.
 
 ## Verification
 
@@ -46,7 +71,7 @@ The pinned local toolchain was used with
 - `@types/node` `24.13.4`
 - `npm run typecheck` passed
 - `npm run build` passed
-- `npm test` passed: 11 tests, 11 passes
+- `npm test` passed: 13 tests, 13 passes
 - `npm pack --dry-run --json` passed with `dist/cli.js` and `dist/index.js` in the package
 
 The first packaging attempt was blocked by a root-owned global npm cache. The

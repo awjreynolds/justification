@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 const PROJECT_METADATA_FILE = "justification.json";
@@ -61,19 +61,29 @@ function descriptor(root: string, metadata: ProjectMetadata): ProjectDescriptor 
 }
 
 async function readProjectMetadata(root: string): Promise<ProjectMetadata | undefined> {
-  let contents: string;
-
+  const metadataPath = join(root, PROJECT_METADATA_FILE);
   try {
-    contents = await readFile(join(root, PROJECT_METADATA_FILE), "utf8");
+    await lstat(metadataPath);
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") {
       return undefined;
     }
 
-    if (isNodeError(error) && error.code === "EISDIR") {
+    throw error;
+  }
+
+  let contents: string;
+
+  try {
+    contents = await readFile(metadataPath, "utf8");
+  } catch (error) {
+    if (
+      isNodeError(error) &&
+      (error.code === "EISDIR" || error.code === "ENOENT")
+    ) {
       throw new ProjectError(
         "MALFORMED_METADATA",
-        `${PROJECT_METADATA_FILE} must be a JSON file`,
+        `${PROJECT_METADATA_FILE} must be a readable JSON file`,
         root,
         { cause: error }
       );
@@ -272,7 +282,7 @@ export async function initializeProject(inputRoot: string): Promise<ProjectDescr
     format: PROJECT_FORMAT,
     version: PROJECT_VERSION,
     id: randomUUID(),
-    name: basename(root),
+    name: basename(root).trim().length === 0 ? "Untitled project" : basename(root),
     sharedKb: SHARED_KB_ID
   };
   await writeFile(

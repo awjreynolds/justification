@@ -4,6 +4,9 @@
   "description": "Local-first project knowledge and justification runtime",
   "license": "MIT",
   "type": "module",
+  "engines": {
+    "node": ">=24.21.0"
+  },
   "bin": {
     "justification": "./dist/cli.js"
   },
@@ -14,9 +17,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test --experimental-strip-types test/*.test.ts"
+    "test": "npm run build && node --test test/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "24.13.4",
