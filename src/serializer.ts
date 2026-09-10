@@ -8,6 +8,7 @@ import { historyRevisions, withProjectLock } from "./storage.ts";
 import { buildSupportTree } from "./support-tree.ts";
 import { supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
+import { reviewOwnerKb } from "./review-scope.ts";
 
 export class ProjectionError extends Error {
   readonly name = "ProjectionError";
@@ -71,7 +72,7 @@ function justificationExtension(state: ProjectState, node: NodeRecord, supportTr
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((contradiction) => ({ ...contradiction }));
   const reviews = state.reviews
-    .filter((review) => review.nodeId === node.id)
+    .filter((review) => review.nodeId === node.id && reviewOwnerKb(state, review) === node.kb)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .map((review) => ({ ...review }));
   const provenance = supportProvenance(supportTree).map(({ source, observation }) => ({
@@ -144,7 +145,7 @@ function bodyFor(node: NodeRecord, state: ProjectState, supportTree: SupportTree
 function maintenanceFor(node: NodeRecord, state: ProjectState): string[] {
   const lines: string[] = [];
   const reviews = state.reviews
-    .filter((review) => review.nodeId === node.id)
+    .filter((review) => review.nodeId === node.id && reviewOwnerKb(state, review) === node.kb)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   if (reviews.length > 0) {
     lines.push("## Review status");
@@ -224,9 +225,36 @@ export function projectDocuments(state: ProjectState, generatedAt = new Date().t
     .map((kb) => kb.id)
     .sort();
   for (const id of kbIds) {
+    const scopedConflicts = state.contradictions
+      .filter((contradiction) => contradiction.kb === id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    const scopedReviews = state.reviews
+      .filter((review) => reviewOwnerKb(state, review) === id)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+    const maintenance: string[] = [];
+    if (scopedConflicts.length > 0) {
+      maintenance.push("## Scoped conflicts");
+      for (const contradiction of scopedConflicts) {
+        maintenance.push(`- Contradiction ${contradiction.id} (${contradiction.status}): ${contradiction.rationale}`);
+        for (const resolution of contradiction.resolutionHistory ?? []) {
+          const winner = resolution.winnerId === undefined ? "" : `; winner ${resolution.winnerId}`;
+          maintenance.push(`  Resolution ${resolution.resolution}${winner}: ${resolution.rationale} (by ${resolution.actor} at ${resolution.at})`);
+        }
+      }
+    }
+    if (scopedReviews.length > 0) {
+      if (maintenance.length > 0) maintenance.push("");
+      maintenance.push("## Scoped reviews");
+      for (const review of scopedReviews) {
+        maintenance.push(`- Review ${review.id} (${review.status}): ${review.reason}`);
+        for (const closure of review.closureHistory ?? []) {
+          maintenance.push(`  Closure: ${closure.rationale} (by ${closure.actor} at ${closure.at})`);
+        }
+      }
+    }
     documents.push({
       relativePath: join("kb", id, "index.md"),
-      content: `# ${state.kbs[id]?.title ?? id}\n\nThis document is a generated Justification projection for knowledge base \`${id}\`.\n`
+      content: `# ${state.kbs[id]?.title ?? id}\n\nThis document is a generated Justification projection for knowledge base \`${id}\`.${maintenance.length === 0 ? "" : `\n\n${maintenance.join("\n")}`}\n`
     });
   }
   documents.push({
@@ -384,6 +412,17 @@ export async function writeProjection(root: string, state: ProjectState, options
       : await detectDrift(root, ownership, previous, options.allowMissing === true);
     await preflightTargets(root, documents, options.repair === true);
     const files: Record<string, string> = { ...existing };
+    const currentPaths = new Set(documents.map((document) => document.relativePath.replaceAll("\\", "/")));
+    if (options.kb === undefined) {
+      // A whole-project publication may follow an identity-preserving scope
+      // move. Remove an old generated path only after drift validation proves
+      // that its bytes came from validated history; unrelated human files are
+      // absent from `ownership` and therefore untouched.
+      for (const path of Object.keys(existing).filter((candidate) => !currentPaths.has(candidate)).sort()) {
+        await rm(join(root, path));
+        delete files[path];
+      }
+    }
     const writtenFiles: string[] = [];
     for (const document of documents) {
       const absolute = join(root, document.relativePath);

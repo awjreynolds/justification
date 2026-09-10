@@ -126,6 +126,9 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
   for (const key of ["changes", "contradictions", "reviews", "scopeChanges"]) {
     if (!Array.isArray(state[key])) throw new StorageError("HISTORY_CORRUPT", `history state field ${key} is invalid`);
   }
+  if (state.artifactDrifts !== undefined && !Array.isArray(state.artifactDrifts)) {
+    throw new StorageError("HISTORY_CORRUPT", "history state field artifactDrifts is invalid");
+  }
   const kbs = state.kbs as Record<string, unknown>;
   if (!isRecord(kbs.shared) || (kbs.shared as Record<string, unknown>).parent !== null) {
     throw new StorageError("HISTORY_CORRUPT", "history is missing the shared knowledge base");
@@ -191,6 +194,23 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
       if (change[key] !== undefined && (typeof change[key] !== "string" || !hasOwn(observations, change[key]))) throw new StorageError("HISTORY_CORRUPT", "history contains a change with a dangling observation reference");
     }
   }
+  const artifactDriftIds = new Set<string>();
+  for (const drift of (state.artifactDrifts ?? []) as unknown[]) {
+    if (!isRecord(drift) || typeof drift.id !== "string" || artifactDriftIds.has(drift.id) || typeof drift.artifactId !== "string" || !hasOwn(nodes, drift.artifactId) || (nodes[drift.artifactId] as Record<string, unknown>).kind !== "artifact" || typeof drift.locator !== "string" || !isRecord(drift.before) || !isRecord(drift.after) || !["content_changed", "availability_changed"].includes(String(drift.reason))) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains an artifact drift with an invalid artifact reference or state");
+    }
+    artifactDriftIds.add(drift.id);
+    for (const stateValue of [drift.before, drift.after]) {
+      if (!isRecord(stateValue) || !["present", "missing", "unavailable", "denied"].includes(String(stateValue.status))) {
+        throw new StorageError("HISTORY_CORRUPT", "history contains an artifact drift with an invalid file state");
+      }
+      for (const key of ["digest", "bytesDigest", "diagnostics"]) {
+        if (stateValue[key] !== undefined && typeof stateValue[key] !== "string") {
+          throw new StorageError("HISTORY_CORRUPT", "history contains an artifact drift with invalid file state metadata");
+        }
+      }
+    }
+  }
   for (const contradiction of state.contradictions as unknown[]) {
     if (!isRecord(contradiction) || typeof contradiction.id !== "string" || typeof contradiction.kb !== "string" || !hasOwn(kbs, contradiction.kb) || typeof contradiction.left !== "string" || !hasOwn(nodes, contradiction.left) || typeof contradiction.right !== "string" || !hasOwn(nodes, contradiction.right) || contradiction.left === contradiction.right || typeof contradiction.rationale !== "string" || !["open", "resolved"].includes(String(contradiction.status))) {
       throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with a dangling node reference or invalid state");
@@ -238,6 +258,12 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
   }
   for (const review of state.reviews as unknown[]) {
     if (!isRecord(review) || typeof review.id !== "string" || typeof review.nodeId !== "string" || !hasOwn(nodes, review.nodeId) || typeof review.triggerId !== "string" || !["change", "contradiction", "artifact_drift", "promotion_conflict"].includes(String(review.triggerType)) || !["open", "closed"].includes(String(review.status))) throw new StorageError("HISTORY_CORRUPT", "history contains a review with a dangling node reference or invalid state");
+    if (review.kb !== undefined && (typeof review.kb !== "string" || !hasOwn(kbs, review.kb))) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains a review with an invalid owning knowledge base");
+    }
+    if (review.triggerType === "artifact_drift" && state.artifactDrifts !== undefined && !artifactDriftIds.has(review.triggerId)) {
+      throw new StorageError("HISTORY_CORRUPT", "artifact drift review has a dangling trigger reference");
+    }
     if (review.status === "closed" && (typeof review.closedBy !== "string" || typeof review.closedAt !== "string" || typeof review.closureRationale !== "string")) {
       throw new StorageError("HISTORY_CORRUPT", "closed review is missing closure metadata");
     }

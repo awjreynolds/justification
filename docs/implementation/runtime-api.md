@@ -426,3 +426,54 @@ missing or unavailable bytes. Provider containment and size/UTF-8 limits still
 apply. The audit reports the observed condition and leaves the file and
 semantic state unchanged. Findings are deterministic for a validated revision
 and sorted by category and subject identifiers.
+
+## Artifact maintenance
+
+An unqualified or KB-scoped `refresh` checks visible artifact files as well as
+sources. Explicit `sourceIds` restricts the operation to sources. Artifact
+checks use the same contained UTF-8 file provider as source capture.
+
+The response adds an `artifactDrifts` array. Each transition contains `id`,
+`artifactId`, `locator`, `before`, `after`, `reason`, `createdBy` and `createdAt`.
+File states contain `status` and, when present, `digest` and `bytesDigest`;
+unavailable states may include `diagnostics`. Reasons are `content_changed`
+or `availability_changed`.
+
+Source and artifact transitions commit together under the same expected
+revision check. A file state different from the accepted artifact opens an
+`artifact_drift` review linked by `triggerId` to its transition. Repeating the
+same state commits nothing. Restoration to accepted bytes is retained without
+opening a new review, so a later recurrence of the old drift is still a new
+event. Old reviews retain their status until explicitly closed. Neither refresh
+nor audit rewrites the file or replaces its accepted digest.
+
+## Promotion
+
+`promote` accepts `nodeId`, `actor`, optional `reason`, optional `conflicts`
+and the common timestamp/revision fields. It preserves the node's identity,
+content, creation attribution and historical explanations while moving its
+current scope to `shared`. Its support premises, outgoing relationship targets,
+recorded option references and source provenance must already be shared.
+Promote a source before its retained evidence. A rejected dependency reports
+`SCOPE_VIOLATION` with its identifier and kind.
+
+A successful response has `promoted: true`, `committed: true`, the updated
+`node`, moved `justifications` and `relationships`, and an attributed
+`scopeChange` containing `id`, `nodeId`, `from`, `to`, optional `reason`,
+`createdBy` and `createdAt`. The generated document moves to the shared
+directory; validated history identifies the obsolete generated child file,
+including after disposable cache loss. Unrelated human files are preserved.
+
+An open child contradiction involving the candidate requires
+`resolve_conflict` before promotion. Conflicts supplied by ID, or differing
+bodies under the same `fields.propositionKey` in shared knowledge, create
+durable `promotion_conflict` reviews and return `promoted: false` with
+`scopeChange: null`. The child remains unchanged. Inspect and close that review
+with an actor and rationale, then retry. Repeated pending attempts preserve the
+same review instead of creating duplicate work, even if `conflicts` is omitted
+from the later request. Resolving a contradiction and
+closing a promotion review are separate explicit actions.
+
+Child-owned conflicts and promotion reviews retain their ownership after a
+successful move. Their history remains readable in the child's index and is
+excluded from shared and sibling review surfaces and generated documents.

@@ -105,3 +105,11 @@ built the executable and passed the 74-test suite. This closes the earlier
 fresh-checkout failure and verifies source maintenance, recovery, and the real
 MCP lifecycle on Ubuntu. Later knowledge-action and bounded-query work was
 still in progress locally and was not part of this run.
+
+## Hosted verification after queries, audit and review corrections
+
+Run [34542061307](https://github.com/awjreynolds/justification/actions/runs/34542061307)
+passed at `7ac5c223f538cb11906214a09f5345f677a2e12c`. The primary agent checked
+the hosted log: a clean `npm ci`, typecheck and build completed, followed by
+87 tests passing and zero failures. Promotion and durable artifact refresh
+were still separate work in progress and are not established by this run.

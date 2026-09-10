@@ -10,6 +10,7 @@ import {
 } from "./domain.ts";
 import type {
   Applicability,
+  ArtifactDriftRecord,
   ChangeRecord,
   ContradictionRecord,
   JustificationRecord,
@@ -38,6 +39,8 @@ import type { SupportTree } from "./support-tree.ts";
 import { validateRuntimeRequest } from "./requests.ts";
 import { executeReadQuery } from "./queries.ts";
 import { executeAudit } from "./audit.ts";
+import { planArtifactDrifts } from "./artifact-refresh.ts";
+import { reviewVisibleInKb } from "./review-scope.ts";
 
 export type RuntimeErrorCode =
   | "INVALID_REQUEST"
@@ -603,6 +606,47 @@ function applySourceTransition(
   return { source, observation, evidence: evidenceDescriptor(evidence), change, reviews, changed: true };
 }
 
+type ArtifactTransition = {
+  readonly drift: ArtifactDriftRecord;
+  readonly review?: ReviewRecord;
+};
+
+function applyArtifactDrift(
+  draftState: ProjectState,
+  plan: Awaited<ReturnType<typeof planArtifactDrifts>>[number],
+  actor: string,
+  createdAt: string
+): ArtifactTransition {
+  const draft = mutableState(draftState);
+  const drift: ArtifactDriftRecord = {
+    id: randomUUID(),
+    artifactId: plan.artifactId,
+    locator: plan.locator,
+    before: plan.before,
+    after: plan.after,
+    reason: plan.reason,
+    createdBy: actor,
+    createdAt
+  };
+  draft.artifactDrifts = [...(draft.artifactDrifts ?? []), drift];
+  if (!plan.requiresReview) return { drift };
+
+  const review: ReviewRecord = {
+    id: randomUUID(),
+    nodeId: plan.artifactId,
+    triggerType: "artifact_drift",
+    triggerId: drift.id,
+    reason: plan.after.status === "present"
+      ? "artifact file bytes differ from the recorded digest"
+      : `artifact file is ${plan.after.status}`,
+    status: "open",
+    createdBy: actor,
+    createdAt
+  };
+  draft.reviews = [...draft.reviews, review];
+  return { drift, review };
+}
+
 type SourceSelector = { readonly sourceId?: string; readonly locator?: string; readonly kb?: string };
 
 async function selectedSource(root: string, state: ProjectState, request: SourceSelector): Promise<SourceRecord> {
@@ -631,6 +675,13 @@ function visibleSources(state: ProjectState, kb?: string): SourceRecord[] {
     .sort((a, b) => a.id.localeCompare(b.id));
 }
 
+function visibleArtifacts(state: ProjectState, kb?: string): NodeRecord[] {
+  if (kb !== undefined) findKb(state, kb);
+  return Object.values(state.nodes)
+    .filter((node) => node.kind === "artifact" && (kb === undefined || node.kb === "shared" || node.kb === kb))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
 function evidenceForSource(state: ProjectState, source: SourceRecord, kb?: string): Array<NodeRecord & { sourceId: string; observationId: string }> {
   return sourceEvidence(state, source, kb)
     .map((evidence) => evidenceDescriptor(evidence))
@@ -645,17 +696,13 @@ function scopedChanges(state: ProjectState, kb?: string): ChangeRecord[] {
 function scopedReviews(state: ProjectState, kb?: string): ReviewRecord[] {
   if (kb !== undefined) findKb(state, kb);
   return chronological(state.reviews.filter((review) => {
-    const node = hasOwn(state.nodes as Record<string, unknown>, review.nodeId) ? state.nodes[review.nodeId] : undefined;
-    return node !== undefined && (kb === undefined || node.kb === "shared" || node.kb === kb);
+    return reviewVisibleInKb(state, review, kb);
   }));
 }
 
 function reviewsVisibleInKb(state: ProjectState, reviews: readonly ReviewRecord[], kb?: string): ReviewRecord[] {
   if (kb !== undefined) findKb(state, kb);
-  return reviews.filter((review) => {
-    const node = hasOwn(state.nodes as Record<string, unknown>, review.nodeId) ? state.nodes[review.nodeId] : undefined;
-    return node !== undefined && (kb === undefined || node.kb === "shared" || node.kb === kb);
-  });
+  return reviews.filter((review) => reviewVisibleInKb(state, review, kb));
 }
 
 function contradictionScope(state: ProjectState, left: NodeRecord, right: NodeRecord, requestedKb?: string): string {
@@ -1073,6 +1120,9 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
   const selected = request.sourceIds === undefined
     ? visibleSources(state, request.kb)
     : [...new Set(request.sourceIds)].sort((a, b) => a.localeCompare(b)).map((sourceId) => sourceForId(state, sourceId, request.kb));
+  const artifactPlans = request.sourceIds === undefined
+    ? await planArtifactDrifts(root, visibleArtifacts(state, request.kb), state.artifactDrifts ?? [])
+    : [];
   const provider = new FileKnowledgeProvider(root);
   const fetched = new Map<string, Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>>();
   for (const source of selected) {
@@ -1088,16 +1138,16 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
       fetched.set(source.id, failure);
     }
   }
-  const unchanged = selected.every((source) => sourceStateMatches(source, fetched.get(source.id)));
+  const unchanged = selected.every((source) => sourceStateMatches(source, fetched.get(source.id))) && artifactPlans.length === 0;
   if (unchanged) {
     return {
       revision: loaded.revision.revision,
-      data: { changed: false, sources: selected, observations: [], changes: [], reviews: [], committed: false, scope: request.kb === undefined ? undefined : { kb: request.kb } }
+      data: { changed: false, sources: selected, observations: [], changes: [], artifactDrifts: [], reviews: [], committed: false, scope: request.kb === undefined ? undefined : { kb: request.kb } }
     };
   }
   const createdAt = atTime(request.at);
   const baseline = request.expectedRevision ?? loaded.revision.revision;
-  type RefreshValue = { readonly changed: boolean; readonly sources: SourceRecord[]; readonly observations: SourceObservation[]; readonly changes: ChangeRecord[]; readonly reviews: ReviewRecord[]; readonly committed: boolean };
+  type RefreshValue = { readonly changed: boolean; readonly sources: SourceRecord[]; readonly observations: SourceObservation[]; readonly changes: ChangeRecord[]; readonly artifactDrifts: ArtifactDriftRecord[]; readonly reviews: ReviewRecord[]; readonly committed: boolean };
   const result = await commitMutation<RefreshValue>(root, actor, "refresh", baseline, (draftState) => {
     const transitions: SourceTransition[] = [];
     for (const source of selected) {
@@ -1109,6 +1159,7 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
       });
       if (result.changed) transitions.push(result);
     }
+    const artifactTransitions = artifactPlans.map((plan) => applyArtifactDrift(draftState, plan, actor, createdAt));
     const changedSources = selected.map((source) => {
       const current = hasOwn(draftState.sources as Record<string, unknown>, source.id) ? draftState.sources[source.id] : undefined;
       return current ?? source;
@@ -1116,12 +1167,16 @@ async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op
     return {
       state: draftState,
       value: {
-        changed: transitions.length > 0,
+        changed: transitions.length > 0 || artifactTransitions.length > 0,
         sources: changedSources,
         observations: transitions.map((transition) => transition.observation),
         changes: transitions.flatMap((transition) => transition.change === undefined ? [] : [transition.change]),
-        reviews: transitions.flatMap((transition) => [...transition.reviews]),
-        committed: transitions.length > 0
+        artifactDrifts: artifactTransitions.map((transition) => transition.drift),
+        reviews: [
+          ...transitions.flatMap((transition) => [...transition.reviews]),
+          ...artifactTransitions.flatMap((transition) => transition.review === undefined ? [] : [transition.review])
+        ],
+        committed: transitions.length > 0 || artifactTransitions.length > 0
       }
     };
   });
@@ -1143,7 +1198,7 @@ async function handleImpact(root: string, request: Extract<RuntimeRequest, { op:
   const changes = chronological(state.changes.filter((change) => sourceIds.has(change.sourceId)));
   const changeIds = new Set(changes.map((change) => change.id));
   const affectedIds = new Set(affected.map((entry) => entry.node.id));
-  const reviews = chronological(state.reviews.filter((review) => affectedIds.has(review.nodeId) && (changeIds.size === 0 || changeIds.has(review.triggerId))));
+  const reviews = chronological(state.reviews.filter((review) => affectedIds.has(review.nodeId) && (changeIds.size === 0 || changeIds.has(review.triggerId)) && reviewVisibleInKb(state, review, request.kb)));
   return {
     revision: loaded.revision.revision,
     data: {
@@ -1171,6 +1226,9 @@ async function handleReview(root: string, request: Extract<RuntimeRequest, { op:
       const draft = mutableState(draftState);
       const current = draft.reviews.find((review) => review.id === reviewId);
       if (current === undefined) throw new RuntimeError("NOT_FOUND", `review not found: ${reviewId}`, { reviewId });
+      if (!reviewVisibleInKb(draftState, current, request.kb)) {
+        throw new RuntimeError("SCOPE_VIOLATION", `review ${reviewId} is outside knowledge base ${request.kb}`, { reviewId, kb: request.kb });
+      }
       visibleNode(draftState, current.nodeId, request.kb);
       if (current.status === "closed") {
         const history = current.closureHistory ?? [];
@@ -1390,6 +1448,276 @@ async function handleRelate(root: string, request: Extract<RuntimeRequest, { op:
   });
 }
 
+function promotionReason(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.trim().length === 0) throw new RuntimeError("INVALID_REQUEST", "promotion reason must be nonempty when provided");
+  return value.trim();
+}
+
+type PromotionDependencies = {
+  readonly justifications: JustificationRecord[];
+  readonly relationships: RelationshipRecord[];
+  readonly source?: SourceRecord;
+};
+
+type PromotionConflictCandidate = {
+  readonly conflictId: string;
+  readonly reason: string;
+};
+
+type PromotionConflictPlan = {
+  readonly candidates: PromotionConflictCandidate[];
+  readonly unresolvedContradictions: ContradictionRecord[];
+};
+
+function promotionConflictPlan(state: ProjectState, node: NodeRecord, from: string, explicitConflicts?: readonly string[]): PromotionConflictPlan {
+  const candidates = new Map<string, PromotionConflictCandidate>();
+  for (const conflictId of explicitConflicts ?? []) {
+    const contradiction = state.contradictions.find((candidate) => candidate.id === conflictId);
+    if (contradiction !== undefined) {
+      if (contradiction.left !== node.id && contradiction.right !== node.id) {
+        throw new RuntimeError("INVALID_REQUEST", `promotion conflict ${conflictId} does not involve node ${node.id}`, { nodeId: node.id, conflictId });
+      }
+      if (contradiction.kb !== from && contradiction.kb !== "shared") {
+        throw new RuntimeError("SCOPE_VIOLATION", `promotion conflict ${conflictId} is outside knowledge base ${from}`, { nodeId: node.id, conflictId, kb: from });
+      }
+      if (contradiction.status === "open") continue;
+      candidates.set(conflictId, {
+        conflictId,
+        reason: `promotion conflict ${conflictId} was supplied explicitly`
+      });
+      continue;
+    }
+    const conflictingNode = nodeById(state, conflictId);
+    if (conflictingNode.id === node.id) throw new RuntimeError("INVALID_REQUEST", "a promotion conflict cannot reference the node being promoted", { nodeId: node.id, conflictId });
+    if (conflictingNode.kb !== "shared") {
+      throw new RuntimeError("SCOPE_VIOLATION", "promotion conflicts must reference shared knowledge", {
+        nodeId: node.id,
+        from,
+        to: "shared",
+        dependencyId: conflictingNode.id,
+        dependencyKind: "promotion_conflict"
+      });
+    }
+    candidates.set(conflictingNode.id, {
+      conflictId: conflictingNode.id,
+      reason: `promotion conflict with shared node ${conflictingNode.id} was supplied explicitly`
+    });
+  }
+
+  for (const review of state.reviews
+    .filter((candidate) => candidate.nodeId === node.id && candidate.triggerType === "promotion_conflict" && candidate.status === "open" && reviewVisibleInKb(state, candidate, from))
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))) {
+    candidates.set(review.triggerId, {
+      conflictId: review.triggerId,
+      reason: review.reason
+    });
+  }
+
+  const propositionKey = node.fields?.propositionKey;
+  if (typeof propositionKey === "string" && propositionKey.trim().length > 0) {
+    for (const sharedNode of Object.values(state.nodes)
+      .filter((candidate) => candidate.kb === "shared" && candidate.id !== node.id && candidate.fields?.propositionKey === propositionKey && candidate.body !== node.body)
+      .sort((left, right) => left.id.localeCompare(right.id))) {
+      candidates.set(sharedNode.id, {
+        conflictId: sharedNode.id,
+        reason: `shared node ${sharedNode.id} has the same proposition key with a different body`
+      });
+    }
+  }
+
+  const unresolvedContradictions = state.contradictions
+    .filter((contradiction) => contradiction.kb === from && contradiction.status === "open" && (contradiction.left === node.id || contradiction.right === node.id))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return { candidates: [...candidates.values()].sort((left, right) => left.conflictId.localeCompare(right.conflictId)), unresolvedContradictions };
+}
+
+function latestPromotionReview(state: ProjectState, nodeId: string, conflictId: string): ReviewRecord | undefined {
+  return state.reviews
+    .filter((review) => review.nodeId === nodeId && review.triggerType === "promotion_conflict" && review.triggerId === conflictId)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id))
+    .at(-1);
+}
+
+type PromotionValue = {
+  readonly node: NodeRecord;
+  readonly scopeChange: ScopeChange | null;
+  readonly justifications: JustificationRecord[];
+  readonly relationships: RelationshipRecord[];
+  readonly reviews?: ReviewRecord[];
+  readonly conflicts?: string[];
+  readonly committed: boolean;
+  readonly promoted: boolean;
+};
+
+function promotionDependencies(state: ProjectState, node: NodeRecord, from: string): PromotionDependencies {
+  const consideredOptions = Array.isArray(node.fields?.consideredOptions) ? [...node.fields.consideredOptions] : [];
+  if (typeof node.fields?.selectedOption === "string" && !consideredOptions.includes(node.fields.selectedOption)) {
+    consideredOptions.push(node.fields.selectedOption);
+  }
+  for (const optionId of consideredOptions) {
+    const option = nodeById(state, optionId);
+    if (option.kb !== "shared") {
+      throw new RuntimeError("SCOPE_VIOLATION", "promotion requires every considered option to be shared", {
+        nodeId: node.id,
+        from,
+        to: "shared",
+        dependencyId: option.id,
+        dependencyKind: "considered_option"
+      });
+    }
+  }
+
+  const justifications = Object.values(state.justifications)
+    .filter((justification) => justification.conclusion === node.id && justification.kb === from)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  for (const justification of justifications) {
+    for (const group of justification.groups) {
+      for (const premiseId of group.premises) {
+        const premise = nodeById(state, premiseId);
+        if (premise.kb !== "shared") {
+          throw new RuntimeError("SCOPE_VIOLATION", "promotion requires every upstream support premise to be shared", {
+            nodeId: node.id,
+            from,
+            to: "shared",
+            dependencyId: premise.id,
+            dependencyKind: "justification_premise"
+          });
+        }
+      }
+    }
+  }
+
+  const relationships = Object.values(state.relationships)
+    .filter((relationship) => relationship.from === node.id && relationship.kb === from)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  for (const relationship of relationships) {
+    const target = nodeById(state, relationship.to);
+    if (target.id !== node.id && target.kb !== "shared") {
+      throw new RuntimeError("SCOPE_VIOLATION", "promotion requires every outgoing relationship target to be shared", {
+        nodeId: node.id,
+        from,
+        to: "shared",
+        dependencyId: target.id,
+        dependencyKind: "relationship_target"
+      });
+    }
+  }
+
+  const source = sourceForNode(state, node);
+  if (source !== undefined && node.kind !== "source" && source.kb !== "shared") {
+    throw new RuntimeError("SCOPE_VIOLATION", "promotion requires source provenance to be shared", {
+      nodeId: node.id,
+      from,
+      to: "shared",
+      dependencyId: source.nodeId,
+      dependencyKind: "source_provenance"
+    });
+  }
+  return { justifications, relationships, ...(source === undefined ? {} : { source }) };
+}
+
+async function handlePromote(root: string, request: Extract<RuntimeRequest, { op: "promote" }>): Promise<RuntimeResponse> {
+  const actor = requireActor(request);
+  const loaded = await readHistory(root);
+  const node = nodeById(loaded.revision.state, request.nodeId);
+  if (node.kb === "shared") throw new RuntimeError("INVALID_SCOPE", `node ${node.id} is already in shared knowledge`, { nodeId: node.id, kb: node.kb });
+  const from = node.kb;
+  findKb(loaded.revision.state, from);
+  promotionDependencies(loaded.revision.state, node, from);
+  const initialConflicts = promotionConflictPlan(loaded.revision.state, node, from, request.conflicts);
+  if (initialConflicts.unresolvedContradictions.length > 0) {
+    throw new RuntimeError("REVIEW_REQUIRED", "promotion requires explicit resolution of child-scoped contradictions", {
+      nodeId: node.id,
+      conflictIds: initialConflicts.unresolvedContradictions.map((contradiction) => contradiction.id)
+    });
+  }
+  const reason = promotionReason(request.reason);
+  const baseline = request.expectedRevision ?? loaded.revision.revision;
+  const createdAt = atTime(request.at);
+  return commitMutation<PromotionValue>(root, actor, "promote", baseline, (draftState) => {
+    const current = nodeById(draftState, node.id);
+    if (current.kb === "shared") throw new RuntimeError("CONFLICT", `node ${current.id} is already in shared knowledge`, { nodeId: current.id, kb: current.kb });
+    const dependencies = promotionDependencies(draftState, current, from);
+    const conflicts = promotionConflictPlan(draftState, current, from, request.conflicts);
+    if (conflicts.unresolvedContradictions.length > 0) {
+      throw new RuntimeError("REVIEW_REQUIRED", "promotion requires explicit resolution of child-scoped contradictions", {
+        nodeId: current.id,
+        conflictIds: conflicts.unresolvedContradictions.map((contradiction) => contradiction.id)
+      });
+    }
+    const pendingConflicts = conflicts.candidates.filter((candidate) => latestPromotionReview(draftState, current.id, candidate.conflictId)?.status !== "closed");
+    if (pendingConflicts.length > 0) {
+      const draft = mutableState(draftState);
+      const newReviews: ReviewRecord[] = [];
+      for (const conflict of pendingConflicts) {
+        if (latestPromotionReview(draftState, current.id, conflict.conflictId) !== undefined) continue;
+        const review: ReviewRecord = {
+          id: randomUUID(),
+          nodeId: current.id,
+          kb: from,
+          triggerType: "promotion_conflict",
+          triggerId: conflict.conflictId,
+          reason: conflict.reason,
+          status: "open",
+          createdBy: actor,
+          createdAt
+        };
+        draft.reviews = [...draft.reviews, review];
+        newReviews.push(review);
+      }
+      const reviews = conflicts.candidates
+        .map((conflict) => latestPromotionReview(draftState, current.id, conflict.conflictId))
+        .filter((review): review is ReviewRecord => review !== undefined);
+      return {
+        state: draftState,
+        value: {
+          node: current,
+          scopeChange: null,
+          justifications: [],
+          relationships: [],
+          reviews,
+          conflicts: conflicts.candidates.map((conflict) => conflict.conflictId),
+          committed: newReviews.length > 0,
+          promoted: false
+        },
+        committed: newReviews.length > 0
+      };
+    }
+    const draft = mutableState(draftState);
+    const promotedNode: NodeRecord = { ...current, kb: "shared" };
+    draft.nodes[current.id] = promotedNode;
+    const movedJustifications = dependencies.justifications.map((justification) => ({ ...justification, kb: "shared" }));
+    for (const justification of movedJustifications) draft.justifications[justification.id] = justification;
+    const movedRelationships = dependencies.relationships.map((relationship) => ({ ...relationship, kb: "shared" }));
+    for (const relationship of movedRelationships) draft.relationships[relationship.id] = relationship;
+    if (dependencies.source !== undefined && current.kind === "source") {
+      draft.sources[dependencies.source.id] = { ...dependencies.source, kb: "shared" };
+    }
+    const scopeChange: ScopeChange = {
+      id: randomUUID(),
+      nodeId: current.id,
+      from,
+      to: "shared",
+      ...(reason === undefined ? {} : { reason }),
+      createdBy: actor,
+      createdAt
+    };
+    draft.scopeChanges = [...draft.scopeChanges, scopeChange];
+    return {
+      state: draftState,
+      value: {
+        node: promotedNode,
+        scopeChange,
+        justifications: movedJustifications,
+        relationships: movedRelationships,
+        committed: true,
+        promoted: true
+      }
+    };
+  });
+}
+
 type Assessment = {
   readonly status: "usable" | "pending" | "unusable";
   readonly reason: string;
@@ -1557,6 +1885,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
   if (request.op === "record") return handleRecord(root, request);
   if (request.op === "justify") return handleJustify(root, request);
   if (request.op === "relate") return handleRelate(root, request);
+  if (request.op === "promote") return handlePromote(root, request);
   if (request.op === "why") return handleWhy(root, request);
   if (request.op === "search" || request.op === "context" || request.op === "trace") return executeReadQuery(current, request, { assessNode });
   if (request.op === "audit") {
@@ -1593,7 +1922,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
       throw error;
     }
   }
-  throw new RuntimeError("INVALID_REQUEST", `unsupported runtime operation: ${request.op}`);
+  throw new RuntimeError("INVALID_REQUEST", `unsupported runtime operation: ${String((request as { readonly op?: unknown }).op)}`);
 }
 
 export { NODE_KINDS, RELATIONSHIP_TYPES };

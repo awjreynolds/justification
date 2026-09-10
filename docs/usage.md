@@ -112,6 +112,14 @@ The general knowledge workflow is:
 6. After a source file changes, call `refresh` with an actor. Inspect the
    returned changes and reviews, then reassess the affected interpretation.
 
+A project or KB `refresh` also checks visible artifact files. Distinct content
+or availability changes are retained in `artifactDrifts` and can open
+`artifact_drift` reviews. Rechecking the same state is a no-op, including after
+rebuild. Restoring accepted bytes records the restoration without closing old
+reviews; drifting again creates fresh work. Refresh preserves the original
+artifact digest and never rewrites the output file. Supplying `sourceIds`
+explicitly selects a source-only refresh.
+
 Support groups are declarations of the argument supplied by a person or agent.
 The runtime checks that their premises are available and applicable; it does not
 infer truth from arbitrary prose or call a language model. A changed or missing
@@ -176,6 +184,10 @@ The `supersession` resolution also requires `winnerId` naming one endpoint.
 Other resolutions are `different_scope`, `different_time`, `source_error`
 and `unresolved`; the last keeps the conflict open. Resolutions retain history
 and do not rewrite either node's content or support.
+
+A child-scoped conflict must have at least one endpoint owned by that child.
+For two shared endpoints, record the conflict in `shared`; an explicit child
+scope for that pair is rejected before any history or projection change.
 
 List review work with `{ "op": "review", "kb": "checkout-cache" }`. To close
 one item, supply `reviewId`, `status: "closed"`, `actor` and `rationale`, with

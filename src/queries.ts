@@ -2,6 +2,7 @@ import { buildSupportTree } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
 import type { HistoryRevision, NodeRecord, NodeKind, ProjectState } from "./domain.ts";
 import type { RuntimeRequest, RuntimeResponse } from "./runtime.ts";
+import { reviewVisibleInKb } from "./review-scope.ts";
 
 export type QueryAssessment = {
   readonly status: "usable" | "pending" | "unusable";
@@ -197,19 +198,7 @@ function isOpenlyDisputed(state: ProjectState, nodeId: string, kb?: string): boo
 }
 
 function reviewVisibleInScope(state: ProjectState, review: ProjectState["reviews"][number], kb?: string): boolean {
-  const node = state.nodes[review.nodeId];
-  if (node === undefined || (kb !== undefined && node.kb !== "shared" && node.kb !== kb)) return false;
-  if (kb === undefined) return true;
-  if (review.triggerType === "contradiction") {
-    const contradiction = state.contradictions.find((candidate) => candidate.id === review.triggerId);
-    return contradiction !== undefined && (contradiction.kb === "shared" || contradiction.kb === kb);
-  }
-  if (review.triggerType === "change") {
-    const change = state.changes.find((candidate) => candidate.id === review.triggerId);
-    const source = change === undefined ? undefined : state.sources[change.sourceId];
-    return source !== undefined && (source.kb === "shared" || source.kb === kb);
-  }
-  return true;
+  return reviewVisibleInKb(state, review, kb);
 }
 
 function openReviewIds(state: ProjectState, nodeId: string, kb?: string): string[] {

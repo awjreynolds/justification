@@ -157,6 +157,22 @@ export type ChangeRecord = Attribution & {
   readonly reason: "content_changed" | "availability_changed";
 };
 
+export type ArtifactFileState = {
+  readonly status: SourceAvailability;
+  readonly digest?: string;
+  readonly bytesDigest?: string;
+  readonly diagnostics?: string;
+};
+
+export type ArtifactDriftRecord = Attribution & {
+  readonly id: string;
+  readonly artifactId: string;
+  readonly locator: string;
+  readonly before: ArtifactFileState;
+  readonly after: ArtifactFileState;
+  readonly reason: "content_changed" | "availability_changed";
+};
+
 export type ReviewStatus = "open" | "closed";
 
 export type ReviewClosure = {
@@ -169,6 +185,8 @@ export type ReviewClosure = {
 export type ReviewRecord = Attribution & {
   readonly id: string;
   readonly nodeId: string;
+  /** Scope that owns review work when the affected node later changes scope. */
+  readonly kb?: string;
   readonly triggerType: "change" | "contradiction" | "artifact_drift" | "promotion_conflict";
   readonly triggerId: string;
   readonly reason: string;
@@ -227,6 +245,8 @@ export type ProjectState = {
   readonly justifications: Readonly<Record<string, JustificationRecord>>;
   readonly relationships: Readonly<Record<string, RelationshipRecord>>;
   readonly changes: readonly ChangeRecord[];
+  /** Optional so histories written before artifact drift tracking remain readable. */
+  readonly artifactDrifts?: readonly ArtifactDriftRecord[];
   readonly contradictions: readonly ContradictionRecord[];
   readonly reviews: readonly ReviewRecord[];
   readonly scopeChanges: readonly ScopeChange[];
@@ -265,6 +285,7 @@ export function emptyState(projectId: string, projectName: string, actor = "syst
     justifications: {},
     relationships: {},
     changes: [],
+    artifactDrifts: [],
     contradictions: [],
     reviews: [],
     scopeChanges: []
