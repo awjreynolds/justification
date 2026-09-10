@@ -146,6 +146,14 @@ file exited `0` with seven passing tests, and the MCP/CLI regression exited
 `0` with ten passing tests after a fresh build. Existing ADR artifact coverage
 also remained green in its focused two-test run.
 
+The standards review noted that the combined locator-and-digest case could
+pass even if only one field had a guard. Two separate public checks now submit
+an ordinary claim with only `fields.locator`, or only a syntactically valid
+64-hex-character `fields.digest`; each requires exact `INVALID_REQUEST` and
+unchanged revision/data. Both were already green with the kind-specific schema
+correction, so no additional production change or historical red run is
+claimed.
+
 ## Canonical lowercase KB identifiers: RED → GREEN
 
 The next public regression attempted `create_kb` with the mixed-case id
@@ -182,7 +190,7 @@ npm run build
 /private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp-lifecycle.test.ts
 ```
 
-All commands passed. The validation file reported eight passing tests, the
+All commands passed. The validation file reported ten passing tests, the
 existing MCP/CLI regression file reported ten passing tests, and the public
 legacy lifecycle test reported one passing test. No dependency or protocol
 version changed, and no MCP transport/schema workaround was needed beyond

@@ -260,3 +260,67 @@ test("runtime rejects mixed-case knowledge-base identifiers", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("runtime rejects a locator on an ordinary claim by itself", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-validation-locator-only-"));
+
+  try {
+    await initializeProject(root);
+    const before = await executeOperation(root, { op: "knowledge_bases" });
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "record",
+        kb: "shared",
+        kind: "claim",
+        title: "Ordinary claims cannot supply a locator",
+        fields: { locator: "nonexistent.md" },
+        actor: "validation:test"
+      } as never),
+      (error: unknown) => {
+        const candidate = error as { code?: string; message?: string };
+        assert.equal(candidate.code, "INVALID_REQUEST");
+        assert.match(candidate.message ?? "", /locator/);
+        return true;
+      }
+    );
+
+    const after = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(after.revision, before.revision);
+    assert.deepEqual(after.data, before.data);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("runtime rejects a digest on an ordinary claim by itself", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-validation-digest-only-"));
+
+  try {
+    await initializeProject(root);
+    const before = await executeOperation(root, { op: "knowledge_bases" });
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "record",
+        kb: "shared",
+        kind: "claim",
+        title: "Ordinary claims cannot supply a digest",
+        fields: { digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" },
+        actor: "validation:test"
+      } as never),
+      (error: unknown) => {
+        const candidate = error as { code?: string; message?: string };
+        assert.equal(candidate.code, "INVALID_REQUEST");
+        assert.match(candidate.message ?? "", /digest/);
+        return true;
+      }
+    );
+
+    const after = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(after.revision, before.revision);
+    assert.deepEqual(after.data, before.data);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
