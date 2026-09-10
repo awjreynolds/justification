@@ -5,16 +5,16 @@ Status: open
 
 ## Destination
 
-An implementation-ready plan for a local-first, vendor-neutral MVP that proves an ADR can be traced to versioned evidence and flagged for review when its support changes. Resolve the model, persistence, provider and MCP contracts, identify revisions to the original brief, and define a staged implementation and verification route.
+A completed, reviewed local-first MVP proving an ADR can be traced to retained evidence and flagged for review when its support changes. The user subsequently instructed completion while away; the implementation contract records routine design decisions made under that authorization.
 
 ## Notes
 
-- This effort charts and resolves planning decisions. After charting, the user invoked TDD and confirmed its public test seams and first init/discovery behavior. That bounded [first slice](../../docs/planning/first-slice.md) may proceed while broader domain and MCP decisions remain open; this is not blanket resolution of those decisions.
-- The init/discovery slice is implemented and reviewed; [implementation evidence](../../docs/implementation/init-tdd.md) and [code review](../../docs/implementation/init-review.md) record its behavior, corrections and limits. The remaining map still concerns the broader MVP.
+- The earlier planning-only gates were superseded by the user’s instruction “Continue until complete. Going afk”. Continue the full original MVP autonomously, record agent choices accurately and preserve TDD and the model assignments. The [MVP contract](../../docs/planning/mvp-contract.md) and [design review](../../docs/implementation/mvp-contract-review.md) govern implementation.
+- Init/discovery is implemented and reviewed; the complete runtime and actual-client MCP experiment are now in progress.
 - Implementation: **gpt-5.6-luna, max** (the user's “Lunar Max”). Code review: **gpt-6-astra, medium**. Do not silently substitute models or lower their effort. Research is a separate role.
 - The user confirmed the runtime, CLI and MCP test seams. Use one behavioral test and minimum implementation per red–green cycle under the [TDD plan](../../docs/planning/tdd-plan.md); reuse that confirmation rather than asking again.
 - Before selecting or upgrading a volatile model, SDK, protocol or format dependency, check its current primary documentation, release status and actual compatibility. Record the check date, exact version/revision, evidence and limitations; newness alone is not a quality claim.
-- Consult Wayfinder, Grilling and Domain Modeling when resolving decisions; use Research for external facts. A HITL ticket requires actual user input; recommendations are not resolutions. Charting resolves no non-research tickets, and subsequent sessions resolve at most one non-research ticket.
+- Retain the decision map as a record. The later user instruction authorizes routine agent decisions across the earlier HITL tickets; each answer identifies that authority and does not imply that the user answered it individually.
 - Tracker: local Markdown, per the installed Wayfinder fallback. Each file in `issues/` is a child; `Blocked by` records dependencies. Claim by setting `Status: claimed` and `Assignee: awjreynolds` before work. Resolve by appending `## Answer` to the ticket, setting `Status: resolved`, and adding a linked gist here.
 - Frontier: open, unassigned children whose blockers are resolved, sorted by filename. Open tickets are discovered from `issues/`, not duplicated in this index.
 - Preserve the original scope: the product owns justification and provenance; providers remain authoritative. MIT/public repository; no application code exists at the start of this map.
@@ -27,16 +27,25 @@ An implementation-ready plan for a local-first, vendor-neutral MVP that proves a
 - [Verify current MCP and source-change contracts for a local runtime](issues/03-mcp-provider-contracts.md): Verified current protocol and change-signal contracts; actual client/SDK compatibility requires a separate check.
 - [Verify current engineering and AI evaluation methods before implementation](issues/15-current-methods.md): Current guidance supports executable evidence and separate review; volatile integrations need dated version and compatibility checks.
 
-## Not yet specified
+- [Agree the smallest ADR demonstration that proves the product](issues/04-mvp-proof.md): The original ADR scenario is the acceptance proof, extended with a second isolated project, unchanged-refresh deduplication and cold rebuild.
+- [Define the minimum evidence and justification model](issues/05-minimum-domain.md): Use immutable project-local node IDs, first-class retained evidence, a small shared node envelope and typed forms for constraints/options.
+- [Separate freshness, belief and review state without rewriting history](issues/06-state-review.md): Keep source availability, evidence freshness, declared support and review independent.
+- [Choose durable authority and an honest OKF compatibility boundary](issues/07-persistence-authority.md): One append-only project history is authoritative: numbered digest-linked complete JSON snapshots committed atomically under a lock.
+- [Define shared inheritance, explicit promotion and project isolation](issues/08-scope-identity.md): Use one shared-to-child inheritance level and immutable IDs.
+- [Define a deterministic provider and selective-refresh transaction](issues/09-refresh-contract.md): Use capability-based file provider with project-relative contained paths, retained UTF-8 observations and deterministic digest/state comparison.
+- [Choose artifact assertion anchors and acceptable drift behavior](issues/11-artifact-contract.md): Trace whole artifact to explicit decision/claim basis and acceptance revision, plus project-relative file locator/content digest.
+- [Choose the MCP clients and compatibility baseline the MVP must support](issues/13-client-baseline.md): The bounded baseline is the current released TypeScript SDK client and installed Codex CLI 0.153.4 over local stdio.
 
-- Exact module seams and package layout after the minimum schema, storage authority and transport contracts are settled.
-- Additional adversarial fixtures needed after support, promotion and review rules become concrete.
-- Migration and compatibility fixtures after a precise OKF version and extension strategy are identified.
-- The content and packaging of the optional agent skill once runtime operations are stable.
+## Remaining delivery work
+
+- Complete Luna-max runtime/CLI/MCP red–green cycles and capture executable evidence.
+- Record actual SDK/Codex compatibility and settle the transport dependency from the experiment.
+- Run independent Astra-medium code reviews, fix material findings through Luna and re-review.
+- Ship the runnable ADR example, operation/backup documentation and optional agent skill; verify packaged installation and push reviewed work.
 
 ## Out of scope
 
-- Building the whole application as part of charting. The subsequently confirmed init/discovery slice is a bounded exception recorded in Notes.
+- The broader vision beyond the original MVP: the delivery limits in the implementation contract remain explicit.
 - Full ATMS, PROV, SACM, IBIS/QOC or OSLC implementations; their useful concepts may inform the MVP.
 - UI, SaaS hosting, vector search, automatic contradiction adjudication, full code indexing, and replacing source systems.
 - Production adapters for every listed provider, rich document sentence anchoring, and autonomous semantic refresh across arbitrary corpora. The MVP must preserve an extension path without implementing these now.

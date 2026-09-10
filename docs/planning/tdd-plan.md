@@ -1,6 +1,6 @@
 # TDD plan
 
-The user requested TDD after the initial Wayfinder chart and confirmed the runtime, CLI and MCP seams on 2026-09-10. TDD is the implementation method. The first behavior is authorized; the broader domain, storage and protocol decisions remain open.
+The user requested TDD after the initial Wayfinder chart and confirmed the runtime, CLI and MCP seams on 2026-09-10. The subsequent instruction to continue until complete authorizes the full MVP. TDD remains the implementation method; the [MVP contract](mvp-contract.md) records the routine design decisions made under that authorization.
 
 ## Confirmed test seams
 

@@ -3,8 +3,8 @@
 Type: grilling
 Label: wayfinder:grilling
 Mode: HITL
-Status: open
-Assignee:
+Status: claimed
+Assignee: awjreynolds
 Parent: [Find the route to a traceable Justification MVP](../map.md)
 Blocked by: 04, 06, 07, 08, 09, 10, 11
 

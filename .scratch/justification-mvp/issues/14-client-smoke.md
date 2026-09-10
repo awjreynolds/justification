@@ -3,8 +3,8 @@
 Type: task
 Label: wayfinder:task
 Mode: AFK
-Status: open
-Assignee:
+Status: claimed
+Assignee: awjreynolds
 Parent: [Find the route to a traceable Justification MVP](../map.md)
 Blocked by: 13
 
