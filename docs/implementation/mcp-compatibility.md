@@ -140,6 +140,31 @@ published SDK server and SDK client talking over real newline-delimited stdio. I
 does not demonstrate an auto fallback against a separate legacy-only implementation;
 the fixture supported both eras and the legacy row explicitly selected legacy mode.
 
+## Production lifecycle evidence
+
+The repository's production adapter was then exercised with the same pinned SDK
+client and the built `dist/cli.js` server by
+`test/mcp-lifecycle.test.ts`. The test created two initialized project roots,
+connected with `{ versionNegotiation: { mode: "legacy" } }`, and observed
+`protocolEra: "legacy"` with negotiated `2025-11-25`. It listed both configured
+projects, then ran a scoped ADR chain in the first project: a file source was
+captured with an explicit source ID, a claim was justified by its retained
+evidence, two explicit options fed a decision with an original basis, and an
+artifact record was based on that decision. The test independently hashed the
+source and artifact bytes, asserted the returned ancestry/provenance and usable
+support from `why`, closed the client, restarted the server and client, and
+asserted an identical `why` response at a fixed evaluation time.
+
+The focused command exited `0` with one passing test:
+
+```text
+npm run build
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp-lifecycle.test.ts
+```
+
+This was an immediately-green integration verification; no pre-implementation
+red run is claimed and no MCP transport or schema change was needed.
+
 ## Installed Codex CLI check
 
 The installed binary reported `codex-cli 0.153.4`. Its help confirms the relevant

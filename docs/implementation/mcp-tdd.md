@@ -129,6 +129,27 @@ npm run typecheck && npm run build && /private/tmp/justification-toolchain/node-
 
 It exited `0`; typecheck and build passed, and all ten MCP/CLI tests passed.
 
+## Production lifecycle verification
+
+An immediately-green SDK-client integration test now exercises the implemented
+ADR chain over the real production stdio server. It configures two initialized
+projects, explicitly negotiates legacy MCP `2025-11-25`, and uses fixed fixture
+IDs and independently computed SHA-256 digests while calling
+`capture_source` → `record` claim → `justify` → `record` options and decision →
+`record` artifact → `why`. The test asserts the decision's basis and selected
+options, the artifact's digest and original basis, the complete upstream
+ancestry and retained source provenance, then closes the client, starts a fresh
+server/client pair, and asserts an identical `why` response at the fixed
+evaluation time.
+
+This is verification of the already implemented public surface; no historical
+red run is claimed for this integration test. The focused command exited `0`
+with one passing test:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp-lifecycle.test.ts
+```
+
 ## Regression and typecheck evidence
 
 An intermediate full-suite command was run as:
@@ -169,13 +190,13 @@ check.
 
 ## Deferred production coverage
 
-The production adapter tests recorded here assert modern protocol negotiation
-(`2026-07-28`) and scoped success for the implemented operations. Focused
-follow-up tests remain for legacy-protocol production negotiation, structured
-success and business-error results across the full operation surface, and
-server restart followed by a scoped mutation/query or refresh. The disposable
-SDK fixture already demonstrated those protocol mechanics; they are
-intentionally deferred until the corresponding runtime operations are
+The production adapter tests recorded here assert modern negotiation
+(`2026-07-28`) for the existing smoke and explicit legacy negotiation
+(`2025-11-25`) for the ADR lifecycle. Focused follow-up tests remain for
+structured success and business-error results across the full operation
+surface, and server restart followed by a scoped mutation/query or refresh.
+The disposable SDK fixture already demonstrated those protocol mechanics; the
+remaining cases are deferred until the corresponding runtime operations are
 complete.
 
 The installed Codex CLI fixture smoke is separate evidence in
