@@ -64,6 +64,12 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
   `.justification/` as disposable. It names only typed errors and layouts
   observed in the implementation/contract; runtime-specific response wording
   remains owned by the implementation slice.
+- CI uses only `ubuntu-latest`, declares top-level `contents: read`, and pins
+  the dated official releases `actions/checkout` v7.0.1 and
+  `actions/setup-node` v7.0.0 to full commit hashes. The release and
+  compatibility check is recorded in
+  [ci-baseline.md](../../docs/implementation/ci-baseline.md); no other runner
+  platform is claimed.
 
 ## Out of scope
 

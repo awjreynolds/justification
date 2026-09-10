@@ -14,21 +14,28 @@
     ".": "./dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CONTEXT.md",
+    ".nvmrc",
+    "docs",
+    "examples",
+    "skills"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').chmodSync('dist/cli.js', 0o755)\"",
+    "demo": "npm run build && node examples/adr-demo.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test test/*.test.ts"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "24.13.4",
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
-    "zod": "4.6.1",
-    "yaml": "^2.9.0"
+    "yaml": "2.9.0",
+    "zod": "4.6.1"
   }
 }

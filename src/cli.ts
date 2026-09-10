@@ -1,9 +1,18 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-import { discoverProjects, initializeProject, ProjectError } from "./index.js";
+import {
+  discoverProjects,
+  executeOperation,
+  initializeProject,
+  ProjectError,
+  RuntimeError
+} from "./index.js";
+import { runMcpServer } from "./mcp.js";
+import type { RuntimeRequest } from "./index.js";
 
 export interface CliIO {
   readonly cwd?: string;
@@ -11,7 +20,8 @@ export interface CliIO {
   readonly stderr?: { write(chunk: string): void };
 }
 
-const usage = "Usage: justification init [directory] | justification projects <directory>...";
+const usage =
+  "Usage: justification init [directory] | justification projects <directory>... | justification run <project-root> <request.json|-> | justification mcp <project-root>...";
 
 export async function runCli(
   argv: readonly string[],
@@ -43,15 +53,83 @@ export async function runCli(
       return 0;
     }
 
+    if (command === "run") {
+      if (arguments_.length !== 2) {
+        return writeError(stderr, "INVALID_REQUEST", "run requires a project root and request file (or -)");
+      }
+
+      let requestText: string;
+      try {
+        requestText = await readRequestText(arguments_[1]);
+      } catch (error) {
+        return writeError(
+          stderr,
+          "INVALID_REQUEST",
+          `cannot read request: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+      let request: unknown;
+      try {
+        request = JSON.parse(requestText);
+      } catch (error) {
+        return writeError(
+          stderr,
+          "INVALID_REQUEST",
+          `request is not valid JSON: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      if (!isRecord(request)) {
+        return writeError(stderr, "INVALID_REQUEST", "request must be a JSON object");
+      }
+
+      const response = await executeOperation(arguments_[0], request as RuntimeRequest);
+      stdout.write(`${JSON.stringify(response, null, 2)}\n`);
+      return 0;
+    }
+
+    if (command === "mcp") {
+      if (arguments_.length === 0) {
+        return writeError(stderr, "INVALID_REQUEST", "mcp requires at least one project root");
+      }
+
+      await runMcpServer(arguments_);
+      return 0;
+    }
+
     return writeError(stderr, "INVALID_REQUEST", usage);
   } catch (error) {
     if (error instanceof ProjectError) {
       return writeError(stderr, error.code, error.message);
     }
 
+    if (error instanceof RuntimeError || hasErrorCode(error)) {
+      return writeError(stderr, error.code, error.message);
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     return writeError(stderr, "COMMAND_FAILED", message);
   }
+}
+
+async function readRequestText(path: string): Promise<string> {
+  if (path !== "-") {
+    return readFile(path, "utf8");
+  }
+
+  const chunks: string[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+  }
+  return chunks.join("");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasErrorCode(value: unknown): value is { code: string; message: string } {
+  return isRecord(value) && typeof value.code === "string" && typeof value.message === "string";
 }
 
 function writeError(
