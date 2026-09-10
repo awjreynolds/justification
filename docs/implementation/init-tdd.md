@@ -10,7 +10,7 @@ Initialization creates `kb/shared` and a readable `justification.json` project
 descriptor. The descriptor stores a generated project ID, display name, the
 `justification.project` format marker, version `1`, and the shared KB ID
 `shared`. Runtime results expose the persisted ID, display name, canonical
-root, and canonical `kb/shared` root. Discovery reads only the roots supplied
+root, and the `kb/shared` path. Discovery reads only the roots supplied
 by the caller; an explicit root without a descriptor is uninitialized and is
 not recursively searched. Malformed or unsupported descriptors and broken
 initialized structure produce typed `ProjectError` codes.

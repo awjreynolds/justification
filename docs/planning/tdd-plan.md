@@ -12,7 +12,7 @@ The user requested TDD after the initial Wayfinder chart and confirmed the runti
 
 Published Markdown/OKF exports are observable runtime outputs. Their eventual conformance tests should use the pinned external format contract. Database tables, private traversal functions, internal call counts and unexported serialization details are not test interfaces.
 
-## First proposed red–green cycle
+## First red–green cycle
 
 **Behavior:** Initialising an empty project makes it discoverable with its shared knowledge base.
 

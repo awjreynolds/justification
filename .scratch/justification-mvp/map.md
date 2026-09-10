@@ -10,6 +10,7 @@ An implementation-ready plan for a local-first, vendor-neutral MVP that proves a
 ## Notes
 
 - This effort charts and resolves planning decisions. After charting, the user invoked TDD and confirmed its public test seams and first init/discovery behavior. That bounded [first slice](../../docs/planning/first-slice.md) may proceed while broader domain and MCP decisions remain open; this is not blanket resolution of those decisions.
+- The init/discovery slice is implemented and reviewed; [implementation evidence](../../docs/implementation/init-tdd.md) and [code review](../../docs/implementation/init-review.md) record its behavior, corrections and limits. The remaining map still concerns the broader MVP.
 - Implementation: **gpt-5.6-luna, max** (the user's “Lunar Max”). Code review: **gpt-6-astra, medium**. Do not silently substitute models or lower their effort. Research is a separate role.
 - The user confirmed the runtime, CLI and MCP test seams. Use one behavioral test and minimum implementation per red–green cycle under the [TDD plan](../../docs/planning/tdd-plan.md); reuse that confirmation rather than asking again.
 - Before selecting or upgrading a volatile model, SDK, protocol or format dependency, check its current primary documentation, release status and actual compatibility. Record the check date, exact version/revision, evidence and limitations; newness alone is not a quality claim.
