@@ -14,6 +14,10 @@ const applicabilitySchema = z
 const actorSchema = z.string().min(1);
 const atSchema = instantSchema();
 const expectedRevisionSchema = z.number().int().nonnegative().optional();
+const knowledgeBaseIdSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/, "knowledge base id must use lowercase letters, numbers, dot, underscore or hyphen");
 
 /**
  * These are the fields callers may provide when recording a node. Provenance
@@ -75,6 +79,13 @@ const recordSchema = z
         message: "basis is only valid for decision or artifact records; use justify to add support"
       });
     }
+    if (request.kind !== "artifact" && (request.fields?.locator !== undefined || request.fields?.digest !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["fields"],
+        message: "locator and digest are only valid for artifact records; capture_source creates source provenance"
+      });
+    }
   });
 
 export const operationRequestSchemas = {
@@ -83,7 +94,7 @@ export const operationRequestSchemas = {
     .strict(),
   create_kb: z
     .object({
-      id: z.string().min(1),
+      id: knowledgeBaseIdSchema,
       title: z.string().min(1),
       parent: z.string().min(1).optional(),
       actor: actorSchema,
@@ -279,6 +290,7 @@ export class RequestValidationError extends Error {
 
 export function validateRuntimeRequest(request: unknown): void {
   if (!isRecord(request) || typeof request.op !== "string") return;
+  if (!Object.prototype.hasOwnProperty.call(operationRequestSchemas, request.op)) return;
   const schema = operationRequestSchemas[request.op as OperationName];
   if (schema === undefined) return;
   const { op: _operation, ...requestFields } = request;
@@ -294,6 +306,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const supportedInstantPattern = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|z|[+-]\d{2}:?\d{2})$/;
+
 function instantSchema(): z.ZodOptional<z.ZodString> {
   return z.string().refine(isOffsetBearingInstant, {
     message: "must be a valid offset-bearing ISO timestamp with a real calendar date"
@@ -301,15 +315,16 @@ function instantSchema(): z.ZodOptional<z.ZodString> {
 }
 
 function isOffsetBearingInstant(value: string): boolean {
-  if (value.trim().length === 0 || !/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) return false;
-  if (!Number.isFinite(Date.parse(value))) return false;
-  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(value);
-  if (match === null) return true;
+  const match = supportedInstantPattern.exec(value);
+  if (match === null) return false;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
-  if (month < 1 || month > 12 || day < 1) return false;
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  if (month < 1 || month > 12 || day < 1 || hour > 23 || minute > 59 || second > 59) return false;
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
   const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
-  return day <= daysInMonth;
+  return day <= daysInMonth && Number.isFinite(Date.parse(value));
 }

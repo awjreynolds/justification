@@ -74,6 +74,96 @@ real temporary-project claim, expects `INVALID_REQUEST`, and confirms that the
 revision/data remain unchanged. It passed immediately after the refinement was
 prepared; no historical red run is claimed for this clause.
 
+## Lowercase separator: RED → GREEN
+
+The review found that a lowercase `t` separator bypassed the calendar branch:
+`2026-02-30t00:00:00Z` was accepted and normalized by `Date.parse`. A separate
+public test submits that spelling through `record`, expects the same stable
+`INVALID_REQUEST`, and checks that the revision and data remain unchanged. The
+focused red command was:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test --test-name-pattern='lowercase separator' test/validation.test.ts
+```
+
+It exited `1` with `AssertionError [ERR_ASSERTION]: Missing expected rejection`.
+The minimum correction requires a supported offset-bearing ISO timestamp
+grammar before checking the real month length, so unsupported spellings cannot
+skip calendar validation. The focused command then exited `0` with one passing
+test, and the complete validation file exited `0` with five passing tests:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/validation.test.ts
+```
+
+The grammar keeps the existing offset forms (`Z`, `z`, `±HH:mm` and `±HHmm`),
+requires an uppercase `T` separator and complete time fields, checks the hour,
+minute, second and actual month length, and still requires `Date.parse` to
+accept the resulting instant.
+
+## Inherited operation names: RED → GREEN
+
+The public regression then exercised the inherited object property names
+`constructor` and `__proto__` as operation discriminants. Before the fix,
+schema lookup returned an inherited constructor/prototype value and attempted
+to call `safeParse` on it. The focused command exited `1`; the first case
+reached the assertion with no error code instead of the required
+`INVALID_REQUEST`:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test --test-name-pattern='inherited operation names' test/validation.test.ts
+```
+
+The minimum correction checks that the operation schema key is an own property
+before indexing the shared schema map. Unknown names then reach the existing
+dispatcher error path, which returns stable `INVALID_REQUEST` diagnostics. The
+same focused command exited `0` with one passing test, and the complete
+validation file exited `0` with six passing tests:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/validation.test.ts
+```
+
+## Kind-specific source fields: RED → GREEN
+
+The next public regression attempted to record an ordinary `claim` with
+`fields.locator: "nonexistent.md"` and `fields.digest: "not-a-digest"`. Before
+the correction, the shared allowlist accepted both values and the record was
+committed, so the focused command exited `1` with `Missing expected rejection`.
+The test also checks that the project revision and knowledge-base result remain
+unchanged after rejection, preventing fabricated provenance from appearing in
+durable state:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test --test-name-pattern='source fields on an ordinary claim' test/validation.test.ts
+```
+
+The minimum correction rejects caller-supplied `locator` and `digest` fields
+for every record kind except `artifact`. Artifact records still pass their
+locator through the existing project-file resolver and digest check. The
+focused command then exited `0` with one passing test; the complete validation
+file exited `0` with seven passing tests, and the MCP/CLI regression exited
+`0` with ten passing tests after a fresh build. Existing ADR artifact coverage
+also remained green in its focused two-test run.
+
+## Canonical lowercase KB identifiers: RED → GREEN
+
+The next public regression attempted `create_kb` with the mixed-case id
+`Shared`. Before the correction, the runtime accepted the id and committed a
+new child KB. The focused command exited `1` with `Missing expected rejection`:
+
+```text
+/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test --test-name-pattern='mixed-case knowledge-base' test/validation.test.ts
+```
+
+The shared request schema now requires child IDs to match
+`^[a-z0-9][a-z0-9._-]{0,63}$`, with a typed `INVALID_REQUEST` diagnostic that
+names the ID and requires lowercase spelling. Existing lowercase IDs remain
+valid; the reserved `shared` name keeps its existing scope error. The focused
+test then passed, and the complete validation file reported eight passing
+tests. Typecheck and the freshly built MCP/CLI regression also passed with ten
+tests.
+
 ## Non-decision basis and final verification
 
 The public validation set also verifies that a claim with a valid existing
@@ -92,7 +182,7 @@ npm run build
 /private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin/node --test test/mcp-lifecycle.test.ts
 ```
 
-All commands passed. The validation file reported four passing tests, the
+All commands passed. The validation file reported eight passing tests, the
 existing MCP/CLI regression file reported ten passing tests, and the public
 legacy lifecycle test reported one passing test. No dependency or protocol
 version changed, and no MCP transport/schema workaround was needed beyond
