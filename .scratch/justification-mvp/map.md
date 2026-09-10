@@ -90,6 +90,29 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
   `A <- B <- A` regression records both the rejected error and unchanged
   durable revision.
 
+## Delivery decisions recorded by the correction slice
+
+- The first P1 scope correction rejects a child-scoped premise on a shared
+  conclusion before commit, so a sibling knowledge-base query cannot inherit
+  support that is only valid in the child. The source-identity correction
+  checks the existing provider, locator and owning KB before fetch or mutation;
+  source IDs remain bound to their original identity.
+- Projection publication runs after the numbered history revision is renamed.
+  If that I/O fails, the runtime reports `PROJECTION_FAILED` with the durable
+  revision, `committed: true` and rebuild recovery guidance. The regression
+  verifies that the semantic revision remains discoverable after the error.
+- Justification group status combines the justification's applicability with
+  every premise assessment. The exporter uses one cycle-safe support tree for
+  runtime ancestry, provenance and Markdown reasoning, and retains support
+  groups, typed relationships, source links and provenance in the generated
+  extension. The correction evidence is recorded in
+  [runtime-tdd.md](../../docs/implementation/runtime-tdd.md) and
+  [adr-chain-review.md](../../docs/implementation/adr-chain-review.md).
+- The dependency lock remains `package-lock.json` lockfile version 3 with the
+  pinned project versions. `npm ci --ignore-scripts --dry-run` completed under
+  the pinned Node v24.21.0 toolchain on 2026-09-10, and the lockfile has no
+  uncommitted changes.
+
 ## Out of scope
 
 - The broader vision beyond the original MVP: the delivery limits in the implementation contract remain explicit.

@@ -142,6 +142,25 @@ npm test -- --test-name-pattern='complete ADR evidence chain'
 Result: the focused chain and the selected existing tests passed (`10 passed,
 0 failed`). The complete build and suite then passed (`33 passed, 0 failed`).
 
+## Standards coverage and support-tree refactor
+
+The standards review found that the ADR fixture asserted ancestry by
+containment but did not independently assert support status. The fixture now
+checks that a claim before any declared basis is `pending` and that the full
+accepted evidence chain is `usable`; its expected upstream IDs are compared as
+an exact set. A separate public fixture checks that an AND group remains
+`pending` when one requirement is not accepted, and that a future
+`validFrom` bound is pending before its evaluation time and usable at the
+boundary.
+
+The runtime and serializer previously carried duplicate support traversal
+logic. `src/support-tree.ts` now builds one deterministic, cycle-safe semantic
+representation, while runtime queries derive exact IDs/provenance from it and
+the serializer owns only Markdown rendering. The direct runtime verification
+after these coverage and refactoring changes passed `12` tests with `0` failed;
+the complete package suite subsequently passed `47` tests with `0` failed after
+the MCP lifecycle fixture's response-shape correction.
+
 ## Support-cycle review correction: GREEN
 
 The first review of the ADR slice found that cycle detection traversed the
@@ -165,3 +184,54 @@ conclusion through the existing support graph before committing. The exact
 GREEN run passed the focused regression (`11 passed, 0 failed` including the
 selected existing runtime tests), and the complete suite passed (`34 passed,
 0 failed`).
+
+## Scope and source identity corrections: GREEN
+
+The first P1 regression created a shared conclusion and a child-only premise,
+then attempted to justify the shared conclusion from the child scope. Before
+the correction, the request was accepted and a sibling `why` query could see
+the child premise; the public test failed with `Missing expected rejection`.
+The minimum fix rejects a shared conclusion whose declared premise is
+child-scoped before the transaction begins. The test also checks that the
+rejected request does not leak the premise into the sibling view.
+
+The second P1 regression captured `first.txt` in `child-a`, then reused its
+source ID for `second.txt` in `child-b`. Before the correction, the source ID
+could be retargeted. The public test failed with `Missing expected rejection`.
+The minimum fix resolves the requested locator and checks the existing source
+provider, locator and owning KB before fetching or mutating; retargeting now
+returns `CONFLICT`, while a source reused with its original locator remains
+unchanged.
+
+The focused verification of both public regressions passed, and the complete
+runtime/package suite now passes `47` tests with `0` failures.
+
+## Post-commit projection failure correction: GREEN
+
+The P1 filesystem regression made `.justification/` unwritable immediately
+before a mutation. Before the correction, history revision `1` was durable
+but the caller received a raw `EACCES` error without the committed revision.
+The minimum storage seam now invokes projection publication after the history
+rename and wraps failures with the committed revision. Runtime maps that
+wrapper to `PROJECTION_FAILED`, including `committed: true` and recovery
+guidance to rebuild after fixing the projection filesystem. The public test
+then verified that `knowledge_bases` still reports revision `1` after the
+failure.
+
+## Applicability and projection correction: GREEN
+
+The P2 applicability regression gave a justification an expired `validUntil`
+bound. Before the correction, its group was reported `usable` even though the
+justification assessment was pending. Group status now requires both a usable
+justification assessment and usable premise assessments; the public test
+passed with both statuses pending.
+
+The export regression independently captured a real source, attached it and an
+accepted requirement to an ordinary claim, and added a typed relationship.
+Before the correction, source links were one directory too shallow and the
+generated extension omitted support groups, relationships and retained
+provenance. The serializer now computes links relative to each generated
+document, preserves those records in the extension, and renders navigable
+premise links. The public export test parses the generated YAML and checks the
+exact premise, relationship and provenance values. The focused correction
+verification and the complete `47`-test suite passed with `0` failures.

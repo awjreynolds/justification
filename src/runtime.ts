@@ -27,9 +27,11 @@ import type {
   SourceObservation,
   SourceRecord
 } from "./domain.ts";
-import { ensureHistory, readHistory, transact } from "./storage.ts";
+import { ensureHistory, PostCommitError, readHistory, transact } from "./storage.ts";
 import { FileKnowledgeProvider, ProviderError } from "./provider.ts";
 import { ProjectionError, writeProjection } from "./serializer.ts";
+import { buildSupportTree, supportNodeIds, supportProvenance } from "./support-tree.ts";
+import type { SupportTree } from "./support-tree.ts";
 
 export type RuntimeErrorCode =
   | "INVALID_REQUEST"
@@ -44,6 +46,7 @@ export type RuntimeErrorCode =
   | "CONFLICT"
   | "REVIEW_REQUIRED"
   | "PROJECTION_DRIFT"
+  | "PROJECTION_FAILED"
   | "AUDIT_FAILED";
 
 export class RuntimeError extends Error {
@@ -267,17 +270,21 @@ async function commitMutation<T>(root: string, actor: string, action: string, ex
   if (expectedRevision !== undefined && expectedRevision !== current.revision.revision) {
     throw new RuntimeError("CONFLICT", `expected revision ${expectedRevision} but current revision is ${current.revision.revision}`, { expectedRevision, currentRevision: current.revision.revision });
   }
-  const transaction = await transact(root, actor, action, (state, nextRevision) => {
-    if (expectedRevision !== undefined && expectedRevision !== nextRevision - 1) throw new RuntimeError("CONFLICT", `expected revision ${expectedRevision} but current revision is ${nextRevision - 1}`, { expectedRevision, currentRevision: nextRevision - 1 });
-    return mutate(state, nextRevision);
-  });
   try {
-    await writeProjection(root, transaction.revision.state, { generatedAt: transaction.revision.committedAt });
+    const transaction = await transact(root, actor, action, (state, nextRevision) => {
+      if (expectedRevision !== undefined && expectedRevision !== nextRevision - 1) throw new RuntimeError("CONFLICT", `expected revision ${expectedRevision} but current revision is ${nextRevision - 1}`, { expectedRevision, currentRevision: nextRevision - 1 });
+      return mutate(state, nextRevision);
+    }, async (revision) => {
+      await writeProjection(root, revision.state, { generatedAt: revision.committedAt });
+    });
+    return { revision: transaction.revision.revision, data: transaction.value };
   } catch (error) {
-    if (error instanceof ProjectionError) throw new RuntimeError("PROJECTION_DRIFT", `semantic revision ${transaction.revision.revision} committed but projection failed: ${error.message}`, { revision: transaction.revision.revision }, { cause: error });
+    if (error instanceof PostCommitError) {
+      const cause = error.cause instanceof Error ? error.cause : new Error(String(error.cause));
+      throw new RuntimeError("PROJECTION_FAILED", `semantic revision ${error.revision.revision} committed but projection failed: ${cause.message}`, { revision: error.revision.revision, committed: true, recovery: "run rebuild after correcting the projection filesystem" }, { cause });
+    }
     throw error;
   }
-  return { revision: transaction.revision.revision, data: transaction.value };
 }
 
 function sourceByLocator(state: ProjectState, locator: string, kb?: string): SourceRecord | undefined {
@@ -321,12 +328,23 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
   findKb(state, kb);
   const provider = new FileKnowledgeProvider(root);
   const resolved = await provider.resolve(request.locator);
-  const fetched = await provider.fetch(resolved);
-  const existing = sourceByLocator(state, resolved.locator, kb);
   const requestedSourceId = request.sourceId === undefined ? undefined : requireUuid(request.sourceId, "sourceId");
+  const sourceById = requestedSourceId === undefined || !hasOwn(state.sources as Record<string, unknown>, requestedSourceId)
+    ? undefined
+    : state.sources[requestedSourceId];
+  if (sourceById !== undefined) {
+    if (sourceById.providerId !== provider.id || sourceById.locator !== resolved.locator) {
+      throw new RuntimeError("CONFLICT", `source identity ${requestedSourceId} is already bound to ${sourceById.locator}`, { sourceId: requestedSourceId, locator: sourceById.locator, requestedLocator: resolved.locator });
+    }
+    if (sourceById.kb !== "shared" && sourceById.kb !== kb) {
+      throw new RuntimeError("SCOPE_VIOLATION", `source ${requestedSourceId} belongs to knowledge base ${sourceById.kb}`, { sourceId: requestedSourceId, sourceKb: sourceById.kb, requestedKb: kb });
+    }
+  }
+  const existing = sourceByLocator(state, resolved.locator, kb);
   if (requestedSourceId !== undefined && existing !== undefined && existing.id !== requestedSourceId) {
     throw new RuntimeError("CONFLICT", `source locator is already associated with ${existing.id}`, { locator: resolved.locator, sourceId: existing.id });
   }
+  const fetched = await provider.fetch(resolved);
   const sourceId = existing?.id ?? requestedSourceId ?? randomUUID();
   if (existing && sourceStateMatches(existing, fetched)) {
     const observation = existing.currentObservationId === undefined ? undefined : state.observations[existing.currentObservationId];
@@ -548,7 +566,14 @@ async function handleJustify(root: string, request: Extract<RuntimeRequest, { op
   const kb = request.kb ?? conclusion.kb;
   findKb(state, kb);
   const groups = normalizeGroups(request.groups);
-  for (const group of groups) for (const premise of group.premises) visibleNode(state, premise, kb);
+  for (const group of groups) {
+    for (const premise of group.premises) {
+      const premiseNode = visibleNode(state, premise, kb);
+      if (conclusion.kb === "shared" && premiseNode.kb !== "shared") {
+        throw new RuntimeError("SCOPE_VIOLATION", "a shared conclusion cannot depend on a child-scoped premise", { conclusion: conclusion.id, premise: premiseNode.id, premiseKb: premiseNode.kb });
+      }
+    }
+  }
   ensureNoSupportCycle(state, conclusion.id, groups);
   const rationale = assertRationale(request.rationale);
   const applicability = validatedApplicability(request.applicability);
@@ -621,42 +646,15 @@ function assessNode(state: ProjectState, nodeId: string, evaluationTime: string,
   return pending ? { status: "pending", reason: "all declared support groups need review" } : { status: "unusable", reason: "no declared support group is usable" };
 }
 
-function collectUpstream(state: ProjectState, start: string): string[] {
-  const result = new Set<string>();
-  const visiting = new Set<string>();
-  const visit = (nodeId: string): void => {
-    if (visiting.has(nodeId)) return;
-    visiting.add(nodeId);
-    const node = nodeById(state, nodeId);
-    for (const justification of Object.values(state.justifications).filter((j) => j.conclusion === nodeId).sort((a, b) => a.id.localeCompare(b.id))) {
-      for (const group of justification.groups) {
-        for (const premise of group.premises) {
-          if (!result.has(premise)) result.add(premise);
-          visit(premise);
-        }
-      }
-    }
-    if (node.kind === "evidence") {
-      const source = currentSourceForNode(state, node);
-      if (source !== undefined && !result.has(source.nodeId)) result.add(source.nodeId);
-    }
-    visiting.delete(nodeId);
-  };
-  visit(start);
-  return [...result].sort((a, b) => a.localeCompare(b));
-}
-
-function provenanceFor(state: ProjectState, upstream: readonly string[]): Array<{ sourceId: string; observationId: string; observedText: string; providerRevision: string }> {
-  const result = new Map<string, { sourceId: string; observationId: string; observedText: string; providerRevision: string }>();
-  for (const id of upstream) {
-    const node = state.nodes[id];
-    if (node?.kind !== "evidence") continue;
-    const source = currentSourceForNode(state, node);
-    const observation = observationForEvidence(state, node);
-    if (source === undefined || observation === undefined || observation.observedText === undefined || observation.providerRevision === undefined) continue;
-    result.set(observation.id, { sourceId: source.id, observationId: observation.id, observedText: observation.observedText, providerRevision: observation.providerRevision });
-  }
-  return [...result.values()].sort((a, b) => a.observationId.localeCompare(b.observationId));
+function provenanceFor(tree: SupportTree): Array<{ sourceId: string; observationId: string; observedText: string; providerRevision: string }> {
+  return supportProvenance(tree)
+    .filter(({ observation }) => observation.observedText !== undefined && observation.providerRevision !== undefined)
+    .map(({ source, observation }) => ({
+      sourceId: source.id,
+      observationId: observation.id,
+      observedText: observation.observedText as string,
+      providerRevision: observation.providerRevision as string
+    }));
 }
 
 async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "why" }>): Promise<RuntimeResponse> {
@@ -667,13 +665,20 @@ async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "w
   const justifications = Object.values(state.justifications).filter((j) => j.conclusion === node.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const originalId = node.fields?.originalBasisJustificationId;
   const originalJustification = typeof originalId === "string" && hasOwn(state.justifications as Record<string, unknown>, originalId) ? state.justifications[originalId] : undefined;
-  const upstreamIds = collectUpstream(state, node.id);
+  const supportTree = buildSupportTree(state, node.id);
+  const upstreamIds = supportNodeIds(supportTree);
   const support = assessNode(state, node.id, evaluationTime);
-  const currentSupport = justifications.map((justification) => ({
-    justification,
-    groups: justification.groups.map((group) => ({ ...group, status: group.premises.every((premise) => assessNode(state, premise, evaluationTime).status === "usable") ? "usable" : "pending" })),
-    assessment: assessApplicability(justification.applicability, evaluationTime)
-  }));
+  const currentSupport = justifications.map((justification) => {
+    const assessment = assessApplicability(justification.applicability, evaluationTime);
+    return {
+      justification,
+      groups: justification.groups.map((group) => ({
+        ...group,
+        status: assessment.status === "usable" && group.premises.every((premise) => assessNode(state, premise, evaluationTime).status === "usable") ? "usable" : "pending"
+      })),
+      assessment
+    };
+  });
   return {
     revision: revision.revision,
     data: {
@@ -685,7 +690,7 @@ async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "w
       currentAlternatives: currentSupport.filter((item) => item.justification.id !== originalJustification?.id),
       justifications: currentSupport,
       upstream: upstreamIds.map((id) => state.nodes[id]).filter((item): item is NodeRecord => item !== undefined),
-      provenance: provenanceFor(state, upstreamIds)
+      provenance: provenanceFor(supportTree)
     }
   };
 }

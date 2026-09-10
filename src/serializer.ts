@@ -4,6 +4,9 @@ import { stringify as stringifyYaml } from "yaml";
 
 import { JUSTIFICATION_PROFILE, canonicalJson, sha256 } from "./domain.ts";
 import type { NodeRecord, ProjectState } from "./domain.ts";
+import { buildSupportTree } from "./support-tree.ts";
+import { supportProvenance } from "./support-tree.ts";
+import type { SupportTree } from "./support-tree.ts";
 
 export class ProjectionError extends Error {
   readonly name = "ProjectionError";
@@ -26,7 +29,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function yamlFrontmatter(node: NodeRecord, state: ProjectState, generatedAt: string): string {
+function nodeLink(from: NodeRecord, target: NodeRecord): string {
+  const fromDirectory = join("kb", from.kb);
+  const targetPath = join("kb", target.kb, `${target.id}.md`);
+  const href = relative(fromDirectory, targetPath).replaceAll(sep, "/");
+  return `[${target.id}](${href})`;
+}
+
+function justificationExtension(state: ProjectState, node: NodeRecord, supportTree: SupportTree): Record<string, unknown> {
+  const justifications = Object.values(state.justifications)
+    .filter((justification) => justification.conclusion === node.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .map((justification) => ({
+      id: justification.id,
+      kb: justification.kb,
+      conclusion: justification.conclusion,
+      groups: justification.groups.map((group) => ({ id: group.id, premises: [...group.premises] })),
+      rationale: justification.rationale,
+      ...(justification.title === undefined ? {} : { title: justification.title }),
+      ...(justification.applicability === undefined ? {} : { applicability: justification.applicability }),
+      createdBy: justification.createdBy,
+      createdAt: justification.createdAt
+    }));
+  const relationships = Object.values(state.relationships)
+    .filter((relationship) => relationship.from === node.id || relationship.to === node.id)
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((relationship) => ({ ...relationship }));
+  const provenance = supportProvenance(supportTree).map(({ source, observation }) => ({
+    sourceId: source.id,
+    observationId: observation.id,
+    providerId: observation.providerId,
+    locator: observation.locator,
+    ...(observation.providerRevision === undefined ? {} : { providerRevision: observation.providerRevision }),
+    ...(observation.digest === undefined ? {} : { digest: observation.digest }),
+    ...(observation.observedBytesDigest === undefined ? {} : { observedBytesDigest: observation.observedBytesDigest }),
+    ...(observation.observedText === undefined ? {} : { observedText: observation.observedText }),
+    availability: observation.availability
+  }));
+  return {
+    profile: JUSTIFICATION_PROFILE,
+    id: node.id,
+    kb: node.kb,
+    kind: node.kind,
+    created_by: node.createdBy,
+    created_at: node.createdAt,
+    ...(node.applicability ? { applicability: node.applicability } : {}),
+    ...(node.fields ? { fields: node.fields } : {}),
+    ...(justifications.length > 0 ? { justifications } : {}),
+    ...(relationships.length > 0 ? { relationships } : {}),
+    ...(provenance.length > 0 ? { provenance } : {})
+  };
+}
+
+function yamlFrontmatter(node: NodeRecord, state: ProjectState, generatedAt: string, supportTree: SupportTree): string {
   const sources: Array<Record<string, string>> = [];
   const sourceId = node.fields?.sourceId;
   if (typeof sourceId === "string") {
@@ -37,16 +92,7 @@ function yamlFrontmatter(node: NodeRecord, state: ProjectState, generatedAt: str
   if (typeof sourceLocator === "string" && sourceLocator.length > 0 && sources.length === 0) {
     sources.push({ resource: sourceLocator });
   }
-  const extension: Record<string, unknown> = {
-    profile: JUSTIFICATION_PROFILE,
-    id: node.id,
-    kb: node.kb,
-    kind: node.kind,
-    created_by: node.createdBy,
-    created_at: node.createdAt,
-    ...(node.applicability ? { applicability: node.applicability } : {}),
-    ...(node.fields ? { fields: node.fields } : {})
-  };
+  const extension = justificationExtension(state, node, supportTree);
   return stringifyYaml({
     type: node.kind,
     generated: { by: "justification/0.1.0", at: generatedAt },
@@ -56,51 +102,51 @@ function yamlFrontmatter(node: NodeRecord, state: ProjectState, generatedAt: str
   }).trimEnd();
 }
 
-function bodyFor(node: NodeRecord, state: ProjectState): string {
+function bodyFor(node: NodeRecord, state: ProjectState, supportTree: SupportTree): string {
   const lines = [node.body.trimEnd()];
   lines.push("", `<!-- justification:id=${node.id} kb=${node.kb} -->`);
   if (node.fields?.sourceId) {
     const source = state.sources[node.fields.sourceId];
-    if (source) lines.push(`Source: [${source.locator}](../${source.locator})`);
+    if (source) {
+      const href = relative(join("kb", node.kb), source.locator).replaceAll(sep, "/");
+      lines.push(`Source: [${source.locator}](${href})`);
+    }
   }
   if (node.fields?.observationId) lines.push(`Retained observation: ${node.fields.observationId}`);
-  const reasoning = reasoningFor(node, state);
+  const reasoning = reasoningFor(node, state, supportTree);
   if (reasoning.length > 0) lines.push("", "## Justification", ...reasoning);
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function reasoningFor(node: NodeRecord, state: ProjectState): string[] {
+function reasoningFor(node: NodeRecord, state: ProjectState, supportTree: SupportTree): string[] {
   const lines: string[] = [];
-  const seen = new Set<string>();
-  const visit = (nodeId: string, depth: number): void => {
-    if (seen.has(nodeId)) return;
-    seen.add(nodeId);
-    const candidate = state.nodes[nodeId];
-    if (candidate === undefined) return;
+  const visit = (tree: SupportTree, depth: number): void => {
+    const candidate = tree.node;
     const prefix = "  ".repeat(Math.min(depth, 8));
-    lines.push(`${prefix}- ${candidate.kind} ${candidate.id}: ${candidate.title}`);
-    const justifications = Object.values(state.justifications)
-      .filter((justification) => justification.conclusion === nodeId)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-    for (const justification of justifications) {
+    lines.push(`${prefix}- ${candidate.kind} ${nodeLink(node, candidate)}: ${candidate.title}`);
+    for (const { justification, groups } of tree.justifications) {
       lines.push(`${prefix}  Basis ${justification.id}: ${justification.rationale}`);
-      for (const group of justification.groups) {
-        lines.push(`${prefix}  Premises: ${group.premises.join(", ")}`);
-        for (const premise of group.premises) visit(premise, depth + 1);
+      for (const { group, premises } of groups) {
+        const premiseLinks = premises.map((premise) => {
+          const target = premise.tree?.node ?? state.nodes[premise.id];
+          return target === undefined ? premise.id : nodeLink(node, target);
+        });
+        lines.push(`${prefix}  Premises: ${premiseLinks.join(", ")}`);
+        for (const premise of premises) {
+          if (premise.tree !== undefined) visit(premise.tree, depth + 1);
+        }
       }
     }
-    if (candidate.kind === "evidence" && typeof candidate.fields?.sourceId === "string") {
-      const source = state.sources[candidate.fields.sourceId];
-      const observationId = candidate.fields.observationId;
-      const observation = typeof observationId === "string" ? state.observations[observationId] : undefined;
-      if (source !== undefined) lines.push(`${prefix}  Source ${source.id}: ${source.locator}`);
-      if (observation !== undefined) {
+    if (candidate.kind === "evidence") {
+      if (tree.source !== undefined) lines.push(`${prefix}  Source ${tree.source.id}: ${tree.source.locator}`);
+      if (tree.observation !== undefined) {
+        const observation = tree.observation;
         lines.push(`${prefix}  Observation ${observation.id}: ${observation.providerRevision ?? "unknown revision"}`);
         if (observation.observedText !== undefined) lines.push(`${prefix}  Observed text: ${observation.observedText.trimEnd()}`);
       }
     }
   };
-  visit(node.id, 0);
+  visit(supportTree, 0);
   return lines;
 }
 
@@ -108,10 +154,13 @@ export function projectDocuments(state: ProjectState, generatedAt = new Date().t
   const nodes = Object.values(state.nodes)
     .filter((node) => kbFilter === undefined || node.kb === kbFilter || node.kb === "shared")
     .sort((a, b) => a.id.localeCompare(b.id));
-  const documents: ProjectionDocument[] = nodes.map((node) => ({
-    relativePath: join("kb", node.kb, `${node.id}.md`),
-    content: `---\n${yamlFrontmatter(node, state, generatedAt)}\n---\n\n${bodyFor(node, state)}`
-  }));
+  const documents: ProjectionDocument[] = nodes.map((node) => {
+    const supportTree = buildSupportTree(state, node.id);
+    return {
+      relativePath: join("kb", node.kb, `${node.id}.md`),
+      content: `---\n${yamlFrontmatter(node, state, generatedAt, supportTree)}\n---\n\n${bodyFor(node, state, supportTree)}`
+    };
+  });
   const kbIds = Object.values(state.kbs)
     .filter((kb) => kbFilter === undefined || kb.id === kbFilter || kb.id === "shared")
     .map((kb) => kb.id)

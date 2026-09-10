@@ -49,3 +49,14 @@ serializer. Review-stage refactoring should give both a shared traversal or
 reasoning representation while keeping Markdown rendering in the serializer.
 
 Correction validation and re-review are pending.
+
+## Correction validation
+
+The five accepted findings now have public regression coverage and minimum
+green implementations. Scope leakage and source-ID retargeting are rejected
+before mutation; post-commit projection errors carry the committed revision;
+expired justifications no longer mark their groups usable; and export output
+contains relative source/premise links plus structured support, relationship
+and provenance records. The pinned Node v24.21.0 build and complete suite pass
+`47` tests with `0` failures. Independent Astra re-review of the corrected
+range remains the next review gate.

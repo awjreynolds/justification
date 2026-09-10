@@ -291,11 +291,24 @@ export type TransactionResult<T> = {
   readonly committed: boolean;
 };
 
+export class PostCommitError extends Error {
+  readonly name = "PostCommitError";
+  readonly revision: HistoryRevision;
+  readonly value: unknown;
+
+  constructor(revision: HistoryRevision, value: unknown, cause: unknown) {
+    super(`post-commit processing failed for revision ${revision.revision}`, { cause });
+    this.revision = revision;
+    this.value = value;
+  }
+}
+
 export async function transact<T>(
   root: string,
   actor: string,
   action: string,
-  mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T }
+  mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T },
+  afterCommit?: (revision: HistoryRevision, value: T) => Promise<void>
 ): Promise<TransactionResult<T>> {
   const current = await ensureHistory(root);
   const directory = await assertSafeHistoryDirectory(root);
@@ -331,6 +344,13 @@ export async function transact<T>(
     await assertSafeEntry(revisionFile(directory, nextRevision), `history revision ${nextRevision}`);
     await writeFile(temporary, `${JSON.stringify(revision, null, 2)}\n`, "utf8");
     await rename(temporary, revisionFile(directory, nextRevision));
+    if (afterCommit !== undefined) {
+      try {
+        await afterCommit(revision, proposed.value);
+      } catch (error) {
+        throw new PostCommitError(revision, proposed.value, error);
+      }
+    }
     return { revision, value: proposed.value, committed: true };
   } finally {
     await lockHandle.close().catch(() => undefined);
