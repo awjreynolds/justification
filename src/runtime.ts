@@ -186,8 +186,11 @@ function nodeById(state: ProjectState, id: string): NodeRecord {
 
 function visibleNode(state: ProjectState, id: string, kb?: string): NodeRecord {
   const node = nodeById(state, id);
-  if (kb !== undefined && node.kb !== "shared" && node.kb !== kb) {
-    throw new RuntimeError("SCOPE_VIOLATION", `node ${id} is outside knowledge base ${kb}`, { id, kb });
+  if (kb !== undefined) {
+    findKb(state, kb);
+    if (node.kb !== "shared" && node.kb !== kb) {
+      throw new RuntimeError("SCOPE_VIOLATION", `node ${id} is outside knowledge base ${kb}`, { id, kb });
+    }
   }
   return node;
 }
@@ -308,9 +311,9 @@ async function artifactDigest(root: string, locator: string): Promise<{ digest: 
   return { digest: fetched.digest, bytesDigest: fetched.bytesDigest };
 }
 
-function sourceStateMatches(source: SourceRecord | undefined, fetched: { status: SourceAvailability; digest?: string }): boolean {
-  if (source === undefined || source.availability !== fetched.status) return false;
-  return fetched.status !== "present" || source.currentDigest === fetched.digest;
+function sourceStateMatches(source: SourceRecord | undefined, fetched: { status: SourceAvailability; digest?: string; providerRevision?: string } | undefined): boolean {
+  if (source === undefined || fetched === undefined || source.availability !== fetched.status) return false;
+  return fetched.status !== "present" || (source.currentDigest === fetched.digest && source.providerRevision === fetched.providerRevision);
 }
 
 function evidenceNodeForObservation(state: ProjectState, observationId: string): NodeRecord | undefined {
@@ -320,6 +323,389 @@ function evidenceNodeForObservation(state: ProjectState, observationId: string):
 function evidenceDescriptor(evidence: NodeRecord | undefined): (NodeRecord & { sourceId: string; observationId: string }) | null {
   if (evidence === undefined || typeof evidence.fields?.sourceId !== "string" || typeof evidence.fields.observationId !== "string") return null;
   return { ...evidence, sourceId: evidence.fields.sourceId, observationId: evidence.fields.observationId };
+}
+
+function visibleSource(state: ProjectState, source: SourceRecord, kb?: string): SourceRecord {
+  if (kb !== undefined) {
+    findKb(state, kb);
+    if (source.kb !== "shared" && source.kb !== kb) {
+      throw new RuntimeError("SCOPE_VIOLATION", `source ${source.id} is outside knowledge base ${kb}`, { sourceId: source.id, sourceKb: source.kb, kb });
+    }
+  }
+  return source;
+}
+
+function sourceForId(state: ProjectState, sourceId: string, kb?: string): SourceRecord {
+  const sources = state.sources as Record<string, SourceRecord>;
+  if (!hasOwn(sources as Record<string, unknown>, sourceId)) throw new RuntimeError("NOT_FOUND", `source not found: ${sourceId}`, { sourceId });
+  return visibleSource(state, sources[sourceId], kb);
+}
+
+function chronological<T extends { readonly createdAt: string; readonly id: string }>(values: readonly T[]): T[] {
+  return [...values].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+}
+
+function sourceEvidence(state: ProjectState, source: SourceRecord, kb?: string): NodeRecord[] {
+  return chronological(Object.values(state.nodes).filter((node) =>
+    node.kind === "evidence" &&
+    node.fields?.sourceId === source.id &&
+    (kb === undefined || node.kb === "shared" || node.kb === kb)
+  ));
+}
+
+function sourceObservations(state: ProjectState, source: SourceRecord): SourceObservation[] {
+  return chronological(Object.values(state.observations).filter((observation) => observation.sourceId === source.id));
+}
+
+function sourceChanges(state: ProjectState, source: SourceRecord): ChangeRecord[] {
+  return chronological(state.changes.filter((change) => change.sourceId === source.id));
+}
+
+function observationMatchesSource(source: SourceRecord | undefined, observation: SourceObservation | undefined): boolean {
+  return source !== undefined && observation !== undefined &&
+    source.availability === "present" && observation.availability === "present" &&
+    source.currentDigest === observation.digest &&
+    source.providerRevision === observation.providerRevision;
+}
+
+function dependentNodes(state: ProjectState, nodeId: string, kb?: string): NodeRecord[] {
+  const candidates = new Map<string, NodeRecord>();
+  for (const justification of Object.values(state.justifications)) {
+    if (!justification.groups.some((group) => group.premises.includes(nodeId))) continue;
+    const conclusion = hasOwn(state.nodes as Record<string, unknown>, justification.conclusion) ? state.nodes[justification.conclusion] : undefined;
+    if (conclusion === undefined || conclusion.kb !== justification.kb) continue;
+    if (kb !== undefined && conclusion.kb !== "shared" && conclusion.kb !== kb) continue;
+    candidates.set(conclusion.id, conclusion);
+  }
+  for (const relationship of Object.values(state.relationships)) {
+    if (relationship.to !== nodeId) continue;
+    const from = hasOwn(state.nodes as Record<string, unknown>, relationship.from) ? state.nodes[relationship.from] : undefined;
+    if (from === undefined || relationship.kb !== from.kb) continue;
+    if (kb !== undefined && from.kb !== "shared" && from.kb !== kb) continue;
+    candidates.set(from.id, from);
+  }
+  return [...candidates.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function downstreamNodeIds(state: ProjectState, seeds: readonly string[], kb?: string): string[] {
+  const result = new Set<string>();
+  const queue = [...seeds];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const dependent of dependentNodes(state, current, kb)) {
+      if (result.has(dependent.id)) continue;
+      result.add(dependent.id);
+      queue.push(dependent.id);
+    }
+  }
+  return [...result].sort((a, b) => a.localeCompare(b));
+}
+
+type SourceTransition = {
+  readonly source: SourceRecord;
+  readonly observation: SourceObservation;
+  readonly evidence: (NodeRecord & { sourceId: string; observationId: string }) | null;
+  readonly change?: ChangeRecord;
+  readonly reviews: readonly ReviewRecord[];
+  readonly changed: boolean;
+};
+
+function appendChangeReviews(
+  draftState: MutableState,
+  change: ChangeRecord,
+  beforeObservationId: string | undefined,
+  actor: string,
+  createdAt: string,
+  kb?: string
+): ReviewRecord[] {
+  const oldEvidence = beforeObservationId === undefined
+    ? undefined
+    : evidenceNodeForObservation(draftState, beforeObservationId);
+  if (oldEvidence === undefined) return [];
+  const nodeIds = [oldEvidence.id, ...downstreamNodeIds(draftState, [oldEvidence.id], kb)];
+  const reviews: ReviewRecord[] = [];
+  for (const nodeId of nodeIds) {
+    if (draftState.reviews.some((review) => review.nodeId === nodeId && review.triggerId === change.id)) continue;
+    const review: ReviewRecord = {
+      id: randomUUID(),
+      nodeId,
+      triggerType: "change",
+      triggerId: change.id,
+      reason: nodeId === oldEvidence.id ? "source observation changed" : "support depends on changed evidence",
+      status: "open",
+      createdBy: actor,
+      createdAt
+    };
+    draftState.reviews = [...draftState.reviews, review];
+    reviews.push(review);
+  }
+  return reviews;
+}
+
+function applySourceTransition(
+  draftState: ProjectState,
+  sourceId: string,
+  fetched: Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>,
+  context: { readonly kb: string; readonly actor: string; readonly createdAt: string; readonly locator: string; readonly title?: string; readonly reviewKb?: string }
+): SourceTransition {
+  const draft = mutableState(draftState);
+  const sources = draft.sources;
+  const observations = draft.observations;
+  const nodes = draft.nodes;
+  const freshExisting = hasOwn(sources as Record<string, unknown>, sourceId) ? sources[sourceId] : undefined;
+  if (freshExisting !== undefined && sourceStateMatches(freshExisting, fetched)) {
+    const observation = freshExisting.currentObservationId === undefined ? undefined : observations[freshExisting.currentObservationId];
+    if (observation === undefined) throw new RuntimeError("INVALID_PROVENANCE", `source ${sourceId} has no current observation`);
+    const evidence = evidenceNodeForObservation(draftState, observation.id);
+    return { source: freshExisting, observation, evidence: evidenceDescriptor(evidence), reviews: [], changed: false };
+  }
+
+  const sourceNodeId = freshExisting?.nodeId ?? randomUUID();
+  if (freshExisting === undefined) {
+    const sourceNode: NodeRecord = {
+      id: sourceNodeId,
+      kb: context.kb,
+      kind: "source",
+      title: context.title?.trim() || `Source: ${context.locator}`,
+      body: `Authoritative file source at ${context.locator}.`,
+      fields: { sourceId, providerId: "file", locator: context.locator },
+      createdBy: context.actor,
+      createdAt: context.createdAt
+    };
+    nodes[sourceNodeId] = sourceNode;
+  }
+
+  const observationId = randomUUID();
+  const observation: SourceObservation = {
+    id: observationId,
+    sourceId,
+    providerId: "file",
+    locator: context.locator,
+    providerRevision: fetched.providerRevision,
+    digest: fetched.digest,
+    observedText: fetched.text,
+    observedBytesDigest: fetched.bytesDigest,
+    availability: fetched.status,
+    diagnostics: fetched.diagnostics,
+    contentType: fetched.contentType,
+    createdBy: context.actor,
+    createdAt: context.createdAt
+  };
+  observations[observationId] = observation;
+
+  let evidence: NodeRecord | undefined;
+  if (fetched.status === "present") {
+    const evidenceId = randomUUID();
+    evidence = {
+      id: evidenceId,
+      kb: freshExisting?.kb ?? context.kb,
+      kind: "evidence",
+      title: `Observation: ${context.locator}`,
+      body: fetched.text ?? "",
+      fields: {
+        sourceId,
+        observationId,
+        providerId: "file",
+        providerRevision: fetched.providerRevision,
+        digest: fetched.digest,
+        observedBytesDigest: fetched.bytesDigest,
+        observedText: fetched.text,
+        availability: fetched.status
+      },
+      createdBy: context.actor,
+      createdAt: context.createdAt
+    };
+    nodes[evidenceId] = evidence;
+  }
+
+  const source: SourceRecord = {
+    id: sourceId,
+    nodeId: sourceNodeId,
+    kb: freshExisting?.kb ?? context.kb,
+    providerId: "file",
+    locator: context.locator,
+    selector: freshExisting?.selector,
+    currentObservationId: observationId,
+    availability: fetched.status,
+    providerRevision: fetched.providerRevision,
+    currentDigest: fetched.digest,
+    lastCheckedAt: context.createdAt,
+    createdBy: freshExisting?.createdBy ?? context.actor,
+    createdAt: freshExisting?.createdAt ?? context.createdAt
+  };
+  sources[sourceId] = source;
+
+  let change: ChangeRecord | undefined;
+  let reviews: ReviewRecord[] = [];
+  if (freshExisting !== undefined) {
+    change = {
+      id: randomUUID(),
+      sourceId,
+      beforeObservationId: freshExisting.currentObservationId,
+      afterObservationId: observationId,
+      beforeDigest: freshExisting.currentDigest,
+      afterDigest: fetched.digest,
+      beforeAvailability: freshExisting.availability,
+      afterAvailability: fetched.status,
+      reason: freshExisting.availability === "present" && fetched.status === "present" ? "content_changed" : "availability_changed",
+      createdBy: context.actor,
+      createdAt: context.createdAt
+    };
+    draft.changes = [...draft.changes, change];
+    reviews = appendChangeReviews(draft, change, freshExisting.currentObservationId, context.actor, context.createdAt, context.reviewKb ?? (freshExisting.kb === "shared" ? undefined : freshExisting.kb));
+  }
+
+  return { source, observation, evidence: evidenceDescriptor(evidence), change, reviews, changed: true };
+}
+
+type SourceSelector = { readonly sourceId?: string; readonly locator?: string; readonly kb?: string };
+
+async function selectedSource(root: string, state: ProjectState, request: SourceSelector): Promise<SourceRecord> {
+  if (request.kb !== undefined) findKb(state, request.kb);
+  if (request.sourceId !== undefined) {
+    const source = sourceForId(state, request.sourceId, request.kb);
+    if (request.locator !== undefined) {
+      const resolved = await new FileKnowledgeProvider(root).resolve(request.locator);
+      if (resolved.locator !== source.locator) {
+        throw new RuntimeError("CONFLICT", `source identity ${source.id} is already bound to ${source.locator}`, { sourceId: source.id, locator: source.locator, requestedLocator: resolved.locator });
+      }
+    }
+    return source;
+  }
+  if (request.locator === undefined) throw new RuntimeError("INVALID_REQUEST", "source selection requires sourceId or locator");
+  const resolved = await new FileKnowledgeProvider(root).resolve(request.locator);
+  const source = sourceByLocator(state, resolved.locator, request.kb);
+  if (source === undefined) throw new RuntimeError("NOT_FOUND", `source not found for locator: ${resolved.locator}`, { locator: resolved.locator, kb: request.kb });
+  return visibleSource(state, source, request.kb);
+}
+
+function visibleSources(state: ProjectState, kb?: string): SourceRecord[] {
+  if (kb !== undefined) findKb(state, kb);
+  return Object.values(state.sources)
+    .filter((source) => kb === undefined || source.kb === "shared" || source.kb === kb)
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function evidenceForSource(state: ProjectState, source: SourceRecord, kb?: string): Array<NodeRecord & { sourceId: string; observationId: string }> {
+  return sourceEvidence(state, source, kb)
+    .map((evidence) => evidenceDescriptor(evidence))
+    .filter((evidence): evidence is NodeRecord & { sourceId: string; observationId: string } => evidence !== null);
+}
+
+function scopedChanges(state: ProjectState, kb?: string): ChangeRecord[] {
+  const sourceIds = new Set(visibleSources(state, kb).map((source) => source.id));
+  return chronological(state.changes.filter((change) => sourceIds.has(change.sourceId)));
+}
+
+function scopedReviews(state: ProjectState, kb?: string): ReviewRecord[] {
+  if (kb !== undefined) findKb(state, kb);
+  return chronological(state.reviews.filter((review) => {
+    const node = hasOwn(state.nodes as Record<string, unknown>, review.nodeId) ? state.nodes[review.nodeId] : undefined;
+    return node !== undefined && (kb === undefined || node.kb === "shared" || node.kb === kb);
+  }));
+}
+
+function supportSourceIds(tree: SupportTree): string[] {
+  const result = new Set<string>();
+  const visit = (current: SupportTree): void => {
+    if (current.node.kind === "source" && typeof current.node.fields?.sourceId === "string") result.add(current.node.fields.sourceId);
+    if (current.node.kind === "evidence" && typeof current.node.fields?.sourceId === "string") result.add(current.node.fields.sourceId);
+    for (const justification of current.justifications) {
+      for (const group of justification.groups) {
+        for (const premise of group.premises) if (premise.tree !== undefined) visit(premise.tree);
+      }
+    }
+  };
+  visit(tree);
+  return [...result].sort((a, b) => a.localeCompare(b));
+}
+
+function supportEvidenceAndObservations(state: ProjectState, sourceIds: readonly string[], kb?: string): { evidence: Array<NodeRecord & { sourceId: string; observationId: string }>; observations: SourceObservation[] } {
+  const evidence = new Map<string, NodeRecord & { sourceId: string; observationId: string }>();
+  const observations = new Map<string, SourceObservation>();
+  for (const sourceId of sourceIds) {
+    const source = hasOwn(state.sources as Record<string, unknown>, sourceId) ? state.sources[sourceId] : undefined;
+    if (source === undefined || (kb !== undefined && source.kb !== "shared" && source.kb !== kb)) continue;
+    for (const entry of evidenceForSource(state, source, kb)) evidence.set(entry.id, entry);
+    for (const observation of sourceObservations(state, source)) observations.set(observation.id, observation);
+  }
+  return {
+    evidence: chronological([...evidence.values()]),
+    observations: chronological([...observations.values()])
+  };
+}
+
+function sourceForNode(state: ProjectState, node: NodeRecord): SourceRecord | undefined {
+  const sourceId = node.fields?.sourceId;
+  if (typeof sourceId === "string" && hasOwn(state.sources as Record<string, unknown>, sourceId)) return state.sources[sourceId];
+  if (node.kind === "source") return Object.values(state.sources).find((source) => source.nodeId === node.id);
+  return undefined;
+}
+
+type ImpactEntry = { readonly node: NodeRecord; readonly paths: readonly string[][]; readonly reasons: readonly string[] };
+
+function impactReason(state: ProjectState, fromId: string, to: NodeRecord): string {
+  const from = hasOwn(state.nodes as Record<string, unknown>, fromId) ? state.nodes[fromId] : undefined;
+  if (from?.kind === "evidence") return "support depends on changed evidence";
+  if (to.kind === "decision" || to.kind === "artifact") return `basis depends on changed ${from?.kind ?? "knowledge"}`;
+  return `support depends on changed ${from?.kind ?? "knowledge"}`;
+}
+
+function impactEntries(state: ProjectState, node: NodeRecord, kb?: string): ImpactEntry[] {
+  const paths = new Map<string, string[][]>();
+  const reasons = new Map<string, Set<string>>();
+  const queue: Array<{ readonly id: string; readonly path: string[] }> = [];
+  const source = sourceForNode(state, node);
+  if (node.kind === "source" && source !== undefined) {
+    for (const evidence of sourceEvidence(state, source, kb)) {
+      const reason = evidence.fields?.observationId === source.currentObservationId ? "source observation retained" : "source observation changed";
+      paths.set(evidence.id, [[node.id, evidence.id]]);
+      reasons.set(evidence.id, new Set([reason]));
+      queue.push({ id: evidence.id, path: [node.id, evidence.id] });
+    }
+  } else {
+    queue.push({ id: node.id, path: [node.id] });
+  }
+  while (queue.length > 0) {
+    const current = queue.shift() as { readonly id: string; readonly path: string[] };
+    for (const dependent of dependentNodes(state, current.id, kb)) {
+      if (current.path.includes(dependent.id)) continue;
+      const path = [...current.path, dependent.id];
+      const existingPaths = paths.get(dependent.id) ?? [];
+      if (!existingPaths.some((candidate) => candidate.length === path.length && candidate.every((id, index) => id === path[index]))) existingPaths.push(path);
+      paths.set(dependent.id, existingPaths);
+      const existingReasons = reasons.get(dependent.id) ?? new Set<string>();
+      existingReasons.add(impactReason(state, current.id, dependent));
+      reasons.set(dependent.id, existingReasons);
+      queue.push({ id: dependent.id, path });
+    }
+  }
+  return [...paths.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, nodePaths]) => ({
+      node: state.nodes[id] as NodeRecord,
+      paths: nodePaths,
+      reasons: [...(reasons.get(id) ?? new Set<string>())].sort((a, b) => a.localeCompare(b))
+    }));
+}
+
+function impactSourceIds(state: ProjectState, node: NodeRecord, affected: readonly ImpactEntry[]): string[] {
+  const sourceIds = new Set<string>();
+  const direct = sourceForNode(state, node);
+  if (direct !== undefined) sourceIds.add(direct.id);
+  for (const entry of affected) {
+    const source = sourceForNode(state, entry.node);
+    if (source !== undefined) sourceIds.add(source.id);
+  }
+  for (const entry of [node, ...affected.map((item) => item.node)]) {
+    try {
+      for (const sourceId of supportSourceIds(buildSupportTree(state, entry.id))) sourceIds.add(sourceId);
+    } catch {
+      // The durable reader already validates references; keep the query safe
+      // if a future provider supplies a partially indexed node.
+    }
+  }
+  return [...sourceIds].sort((a, b) => a.localeCompare(b));
 }
 
 async function handleCaptureSource(root: string, request: Extract<RuntimeRequest, { op: "capture_source" }>): Promise<RuntimeResponse> {
@@ -349,6 +735,9 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
   const fetched = await provider.fetch(resolved);
   const sourceId = existing?.id ?? requestedSourceId ?? randomUUID();
   if (existing && sourceStateMatches(existing, fetched)) {
+    if (request.expectedRevision !== undefined && request.expectedRevision !== loaded.revision.revision) {
+      throw new RuntimeError("CONFLICT", `expected revision ${request.expectedRevision} but current revision is ${loaded.revision.revision}`, { expectedRevision: request.expectedRevision, currentRevision: loaded.revision.revision });
+    }
     const observation = existing.currentObservationId === undefined ? undefined : state.observations[existing.currentObservationId];
     const evidence = observation === undefined ? undefined : evidenceNodeForObservation(state, observation.id);
     return {
@@ -358,111 +747,191 @@ async function handleCaptureSource(root: string, request: Extract<RuntimeRequest
   }
   const baseline = request.expectedRevision ?? loaded.revision.revision;
   const createdAt = atTime(request.at);
-  type CaptureValue = { source: SourceRecord; observation: SourceObservation | undefined; evidence: (NodeRecord & { sourceId: string; observationId: string }) | null; changed: boolean; committed: boolean; recordedAtRevision?: number };
-  return commitMutation<CaptureValue>(root, actor, "capture_source", baseline, (draftState, nextRevision) => {
-    const draft = mutableState(draftState);
-    const sources = draft.sources;
-    const observations = draft.observations;
-    const nodes = draft.nodes;
-    const freshExisting = hasOwn(sources as Record<string, unknown>, sourceId) ? sources[sourceId] : undefined;
-    if (freshExisting && sourceStateMatches(freshExisting, fetched)) {
-      const observation = freshExisting.currentObservationId === undefined ? undefined : observations[freshExisting.currentObservationId];
-      const evidence = observation === undefined ? undefined : Object.values(nodes).find((node) => node.kind === "evidence" && node.fields?.observationId === observation.id);
-      return { state: draftState, value: { source: freshExisting, observation, evidence: evidenceDescriptor(evidence), changed: false, committed: false } };
-    }
-    const sourceNodeId = freshExisting?.nodeId ?? randomUUID();
-    if (!freshExisting) {
-      const sourceNode: NodeRecord = {
-        id: sourceNodeId,
-        kb,
-        kind: "source",
-        title: request.title?.trim() || `Source: ${resolved.locator}`,
-        body: `Authoritative file source at ${resolved.locator}.`,
-        fields: { sourceId, providerId: "file", locator: resolved.locator },
-        createdBy: actor,
-        createdAt
-      };
-      nodes[sourceNodeId] = sourceNode;
-    }
-    const observationId = randomUUID();
-    const observation: SourceObservation = {
-      id: observationId,
-      sourceId,
-      providerId: "file",
+  type CaptureValue = { source: SourceRecord; observation: SourceObservation; evidence: (NodeRecord & { sourceId: string; observationId: string }) | null; changed: boolean; committed: boolean; change?: ChangeRecord; reviews: readonly ReviewRecord[] };
+  return commitMutation<CaptureValue>(root, actor, "capture_source", baseline, (draftState) => {
+    const transition = applySourceTransition(draftState, sourceId, fetched, {
+      kb,
+      actor,
+      createdAt,
       locator: resolved.locator,
-      providerRevision: fetched.providerRevision,
-      digest: fetched.digest,
-      observedText: fetched.text,
-      observedBytesDigest: fetched.bytesDigest,
-      availability: fetched.status,
-      diagnostics: fetched.diagnostics,
-      contentType: fetched.contentType,
-      createdBy: actor,
-      createdAt
-    };
-    observations[observationId] = observation;
-    let evidence: NodeRecord | undefined;
-    if (fetched.status === "present") {
-      const evidenceId = randomUUID();
-      evidence = {
-        id: evidenceId,
-        kb,
-        kind: "evidence",
-        title: `Observation: ${resolved.locator}`,
-        body: fetched.text ?? "",
-        fields: {
-          sourceId,
-          observationId,
-          providerId: "file",
-          providerRevision: fetched.providerRevision,
-          digest: fetched.digest,
-          observedBytesDigest: fetched.bytesDigest,
-          observedText: fetched.text,
-          availability: fetched.status
-        },
-        createdBy: actor,
-        createdAt
-      };
-      nodes[evidenceId] = evidence;
-    }
-    const source: SourceRecord = {
-      id: sourceId,
-      nodeId: sourceNodeId,
-      kb: freshExisting?.kb ?? kb,
-      providerId: "file",
-      locator: resolved.locator,
-      selector: freshExisting?.selector,
-      currentObservationId: observationId,
-      availability: fetched.status,
-      providerRevision: fetched.providerRevision,
-      currentDigest: fetched.digest,
-      lastCheckedAt: createdAt,
-      createdBy: freshExisting?.createdBy ?? actor,
-      createdAt: freshExisting?.createdAt ?? createdAt
-    };
-    sources[sourceId] = source;
-    const beforeObservationId = freshExisting?.currentObservationId;
-    if (freshExisting && (beforeObservationId !== observationId || !sourceStateMatches(freshExisting, fetched))) {
-      const change: ChangeRecord = {
-        id: randomUUID(),
-        sourceId,
-        beforeObservationId,
-        afterObservationId: observationId,
-        beforeDigest: freshExisting.currentDigest,
-        afterDigest: fetched.digest,
-        beforeAvailability: freshExisting.availability,
-        afterAvailability: fetched.status,
-        reason: freshExisting.availability === "present" && fetched.status === "present" ? "content_changed" : "availability_changed",
-        createdBy: actor,
-        createdAt
-      };
-      draft.changes = [...draft.changes, change];
-    }
+      title: request.title
+    });
     return {
       state: draftState,
-      value: { source, observation, evidence: evidenceDescriptor(evidence), changed: true, committed: true, recordedAtRevision: nextRevision }
+      value: {
+        source: transition.source,
+        observation: transition.observation,
+        evidence: transition.evidence,
+        changed: transition.changed,
+        committed: true,
+        change: transition.change,
+        reviews: transition.reviews
+      }
     };
   });
+}
+
+async function handleInspectSource(root: string, request: Extract<RuntimeRequest, { op: "inspect_source" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  const state = loaded.revision.state;
+  const source = await selectedSource(root, state, request);
+  const observations = sourceObservations(state, source);
+  const evidence = evidenceForSource(state, source, request.kb);
+  const changes = sourceChanges(state, source);
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      source,
+      observations,
+      evidence,
+      changes,
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
+}
+
+async function handleEvidence(root: string, request: Extract<RuntimeRequest, { op: "evidence" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  const state = loaded.revision.state;
+  let source: SourceRecord;
+  if (request.evidenceId !== undefined) {
+    const node = nodeById(state, request.evidenceId);
+    if (node.kind !== "evidence" || typeof node.fields?.sourceId !== "string") {
+      throw new RuntimeError("INVALID_PROVENANCE", `node ${request.evidenceId} is not retained evidence`, { evidenceId: request.evidenceId });
+    }
+    visibleNode(state, node.id, request.kb);
+    source = sourceForId(state, node.fields.sourceId, request.kb);
+    if (request.sourceId !== undefined && request.sourceId !== source.id) {
+      throw new RuntimeError("CONFLICT", `evidence ${node.id} belongs to source ${source.id}`, { evidenceId: node.id, sourceId: source.id, requestedSourceId: request.sourceId });
+    }
+  } else {
+    if (request.sourceId === undefined) throw new RuntimeError("INVALID_REQUEST", "evidence selection requires evidenceId or sourceId");
+    source = sourceForId(state, request.sourceId, request.kb);
+  }
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      source,
+      observations: sourceObservations(state, source),
+      evidence: evidenceForSource(state, source, request.kb),
+      changes: sourceChanges(state, source),
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
+}
+
+async function handleChanged(root: string, request: Extract<RuntimeRequest, { op: "changed" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  const state = loaded.revision.state;
+  const sources = request.sourceId === undefined ? visibleSources(state, request.kb) : [sourceForId(state, request.sourceId, request.kb)];
+  const sourceIds = new Set(sources.map((source) => source.id));
+  const observations = chronological(Object.values(state.observations).filter((observation) => sourceIds.has(observation.sourceId)));
+  const changes = chronological(state.changes.filter((change) => sourceIds.has(change.sourceId)));
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      sources,
+      observations,
+      changes,
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
+}
+
+async function handleRefresh(root: string, request: Extract<RuntimeRequest, { op: "refresh" }>): Promise<RuntimeResponse> {
+  const actor = requireActor(request);
+  const loaded = await readHistory(root);
+  if (request.expectedRevision !== undefined && request.expectedRevision !== loaded.revision.revision) {
+    throw new RuntimeError("CONFLICT", `expected revision ${request.expectedRevision} but current revision is ${loaded.revision.revision}`, { expectedRevision: request.expectedRevision, currentRevision: loaded.revision.revision });
+  }
+  const state = loaded.revision.state;
+  const selected = request.sourceIds === undefined
+    ? visibleSources(state, request.kb)
+    : [...new Set(request.sourceIds)].sort((a, b) => a.localeCompare(b)).map((sourceId) => sourceForId(state, sourceId, request.kb));
+  const provider = new FileKnowledgeProvider(root);
+  const fetched = new Map<string, Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>>();
+  for (const source of selected) {
+    const resolved = await provider.resolve(source.locator);
+    if (resolved.locator !== source.locator) {
+      throw new RuntimeError("CONFLICT", `source identity ${source.id} is bound to a noncanonical locator`, { sourceId: source.id, locator: source.locator, resolvedLocator: resolved.locator });
+    }
+    fetched.set(source.id, await provider.fetch(resolved));
+  }
+  const unchanged = selected.every((source) => sourceStateMatches(source, fetched.get(source.id)));
+  if (unchanged) {
+    return {
+      revision: loaded.revision.revision,
+      data: { changed: false, sources: selected, observations: [], changes: [], reviews: [], committed: false, scope: request.kb === undefined ? undefined : { kb: request.kb } }
+    };
+  }
+  const createdAt = atTime(request.at);
+  const baseline = request.expectedRevision ?? loaded.revision.revision;
+  type RefreshValue = { readonly changed: boolean; readonly sources: SourceRecord[]; readonly observations: SourceObservation[]; readonly changes: ChangeRecord[]; readonly reviews: ReviewRecord[]; readonly committed: boolean };
+  return commitMutation<RefreshValue>(root, actor, "refresh", baseline, (draftState) => {
+    const transitions: SourceTransition[] = [];
+    for (const source of selected) {
+      const result = applySourceTransition(draftState, source.id, fetched.get(source.id) as Awaited<ReturnType<FileKnowledgeProvider["fetch"]>>, {
+        kb: source.kb,
+        actor,
+        createdAt,
+        locator: source.locator
+      });
+      if (result.changed) transitions.push(result);
+    }
+    const changedSources = selected.map((source) => {
+      const current = hasOwn(draftState.sources as Record<string, unknown>, source.id) ? draftState.sources[source.id] : undefined;
+      return current ?? source;
+    });
+    return {
+      state: draftState,
+      value: {
+        changed: transitions.length > 0,
+        sources: changedSources,
+        observations: transitions.map((transition) => transition.observation),
+        changes: transitions.flatMap((transition) => transition.change === undefined ? [] : [transition.change]),
+        reviews: transitions.flatMap((transition) => [...transition.reviews]),
+        committed: transitions.length > 0
+      }
+    };
+  });
+}
+
+async function handleImpact(root: string, request: Extract<RuntimeRequest, { op: "impact" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  const state = loaded.revision.state;
+  const node = visibleNode(state, request.nodeId, request.kb);
+  const affected = impactEntries(state, node, request.kb);
+  const sourceIds = new Set(impactSourceIds(state, node, affected));
+  const changes = chronological(state.changes.filter((change) => sourceIds.has(change.sourceId)));
+  const changeIds = new Set(changes.map((change) => change.id));
+  const affectedIds = new Set(affected.map((entry) => entry.node.id));
+  const reviews = chronological(state.reviews.filter((review) => affectedIds.has(review.nodeId) && (changeIds.size === 0 || changeIds.has(review.triggerId))));
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      node,
+      affected,
+      changes,
+      reviews,
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
+}
+
+async function handleReview(root: string, request: Extract<RuntimeRequest, { op: "review" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  if (request.reviewId !== undefined || request.actor !== undefined || request.rationale !== undefined) {
+    throw new RuntimeError("INVALID_REQUEST", "review mutations are not available in the source maintenance slice");
+  }
+  const reviews = scopedReviews(loaded.revision.state, request.kb).filter((review) => request.status === undefined || review.status === request.status);
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      reviews,
+      changes: scopedChanges(loaded.revision.state, request.kb),
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
 }
 
 function validatedApplicability(value: unknown): Applicability | undefined {
@@ -628,7 +1097,7 @@ function assessNode(state: ProjectState, nodeId: string, evaluationTime: string,
   if (node.kind === "evidence") {
     const source = currentSourceForNode(state, node);
     const observation = observationForEvidence(state, node);
-    if (source?.availability === "present" && observation?.availability === "present" && source.currentObservationId === observation.id && source.currentDigest === observation.digest) return { status: "usable", reason: "retained evidence matches the current source observation" };
+    if (observationMatchesSource(source, observation)) return { status: "usable", reason: "retained evidence matches the current source digest and provider revision" };
     return { status: "pending", reason: "retained evidence is historical or its source is unavailable" };
   }
   const justifications = Object.values(state.justifications).filter((j) => j.conclusion === nodeId && j.kb === node.kb);
@@ -675,6 +1144,9 @@ async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "w
   const supportTree = buildSupportTree(state, node.id);
   const upstreamIds = supportNodeIds(supportTree);
   const support = assessNode(state, node.id, evaluationTime);
+  const retained = supportEvidenceAndObservations(state, supportSourceIds(supportTree), request.kb);
+  const changes = scopedChanges(state, request.kb);
+  const reviews = scopedReviews(state, request.kb);
   const currentSupport = justifications.map((justification) => {
     const assessment = assessApplicability(justification.applicability, evaluationTime);
     return {
@@ -697,7 +1169,12 @@ async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "w
       currentAlternatives: currentSupport.filter((item) => item.justification.id !== originalJustification?.id),
       justifications: currentSupport,
       upstream: upstreamIds.map((id) => state.nodes[id]).filter((item): item is NodeRecord => item !== undefined),
-      provenance: provenanceFor(supportTree)
+      provenance: provenanceFor(supportTree),
+      reviews,
+      changes,
+      evidence: retained.evidence,
+      observations: retained.observations,
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
     }
   };
 }
@@ -734,7 +1211,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
       throw new RuntimeError("INVALID_SCOPE", "knowledge base id must be a non-shared identifier using letters, numbers, dot, underscore or hyphen");
     }
     if (typeof request.title !== "string" || request.title.trim().length === 0) throw new RuntimeError("INVALID_REQUEST", "knowledge base title must be nonempty");
-    if (current.state.kbs[request.id]) throw new RuntimeError("CONFLICT", `knowledge base already exists: ${request.id}`, { id: request.id });
+    if (hasOwn(current.state.kbs as Record<string, unknown>, request.id)) throw new RuntimeError("CONFLICT", `knowledge base already exists: ${request.id}`, { id: request.id });
     const parent = request.parent ?? "shared";
     findKb(current.state, parent);
     if (parent !== "shared") throw new RuntimeError("INVALID_SCOPE", "child knowledge bases must inherit directly from shared");
@@ -747,7 +1224,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
       if (request.expectedRevision !== undefined && request.expectedRevision !== nextRevision - 1) {
         throw new RuntimeError("CONFLICT", `expected revision ${request.expectedRevision} but current revision is ${nextRevision - 1}`);
       }
-      if (state.kbs[request.id]) throw new RuntimeError("CONFLICT", `knowledge base already exists: ${request.id}`);
+      if (hasOwn(state.kbs as Record<string, unknown>, request.id)) throw new RuntimeError("CONFLICT", `knowledge base already exists: ${request.id}`);
       const knowledgeBase: KnowledgeBaseRecord = { id: request.id, title: request.title.trim(), parent, createdBy: actor, createdAt };
       const nextState = { ...state, kbs: { ...state.kbs, [request.id]: knowledgeBase } } as ProjectState;
       return { state: nextState, value: kbDescriptor(root, knowledgeBase, false) };
@@ -755,9 +1232,15 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
     return { revision: result.revision.revision, data: { knowledgeBase: result.value, committed: true } };
   }
   if (request.op === "capture_source") return handleCaptureSource(root, request);
+  if (request.op === "inspect_source") return handleInspectSource(root, request);
+  if (request.op === "evidence") return handleEvidence(root, request);
+  if (request.op === "refresh") return handleRefresh(root, request);
+  if (request.op === "changed") return handleChanged(root, request);
   if (request.op === "record") return handleRecord(root, request);
   if (request.op === "justify") return handleJustify(root, request);
   if (request.op === "why") return handleWhy(root, request);
+  if (request.op === "impact") return handleImpact(root, request);
+  if (request.op === "review") return handleReview(root, request);
   if (request.op === "rebuild") return handleRebuild(root, request);
   if (request.op === "export") {
     if (request.kb !== undefined) findKb(current.state, request.kb);

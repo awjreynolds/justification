@@ -276,3 +276,55 @@ document, preserves those records in the extension, and renders navigable
 premise links. The public export test parses the generated YAML and checks the
 exact premise, relationship and provenance values. The focused correction
 verification and the complete `47`-test suite passed with `0` failures.
+
+## Source-change lifecycle: GREEN
+
+The documented source-maintenance shapes were added before the public test.
+The fixture creates two isolated projects, captures a real UTF-8 source,
+retains its evidence, builds a claim → decision → artifact support chain, and
+records an independently hashed pre-change explanation at a fixed revision and
+evaluation time. The fixture then changes the source; its subsequent assertions
+cover the documented source/evidence inspection, impact paths, review listing,
+current and historical `why`, unchanged refresh and cross-project checks.
+
+The intentional first RED run was:
+
+```text
+PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  npm run build && \
+  PATH=/private/tmp/justification-toolchain/node-v24.21.0-darwin-arm64/bin:$PATH \
+  node --test --test-name-pattern='refreshes changed evidence and exposes the exact ADR impact' \
+  test/runtime.test.ts
+```
+
+The real temporary-project setup passed through the historical explanation and
+source mutation. The first missing behavior was the selected `refresh`
+operation, so the later assertions were not reached. It failed with:
+
+```text
+Error [RuntimeError]: unsupported runtime operation: refresh
+code: INVALID_REQUEST
+```
+
+The minimum implementation uses one transition helper for `capture_source`
+and `refresh`. It compares durable availability, digest and provider revision,
+retains every observation and present-content evidence node, appends a
+`ChangeRecord` for real transitions, and creates one open change review for
+the prior evidence plus each declared downstream dependent. An unchanged
+refresh returns the selected source records with empty observation, change and
+review arrays and does not advance the semantic revision. Query operations
+read source, evidence, change and review records from validated history;
+`impact` traverses support and typed dependency links with inclusive paths.
+Current `why` retains all observations for sources in its support tree, while
+historical `why` reads the selected immutable revision. Evidence is usable
+again when a restored source has the same digest and provider revision, even
+though the independent review remains open.
+
+The GREEN verification passed the focused source lifecycle test (`21 passed,
+0 failed` in the selected runtime run) and the pinned Node v24.21.0 build and
+typecheck passed. A direct temporary-project check also covered
+present → missing → restored transitions: restoration advanced one revision,
+created a new observation, returned no duplicate review work, and made the
+original evidence usable by digest/provider revision. The complete package
+run remains subject to the separate recovery and request-validation workers'
+tests; those unrelated failures are recorded by their owning slices.

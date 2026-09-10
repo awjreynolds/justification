@@ -967,6 +967,288 @@ test("export preserves navigable source links, support groups, relationships and
   }
 });
 
+test("refreshes changed evidence and exposes the exact ADR impact with durable review state", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-change-"));
+  const secondRoot = await mkdtemp(join(tmpdir(), "justification-runtime-source-change-second-"));
+  try {
+    await initializeProject(root);
+    await initializeProject(secondRoot);
+    const foreign = await executeOperation(secondRoot, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Foreign project claim",
+      body: "This node belongs to a different project.",
+      actor: "human:foreign"
+    });
+    const foreignNodeId = (foreign.data as { node: { id: string } }).node.id;
+    const secondProjectBefore = await executeOperation(secondRoot, { op: "knowledge_bases" });
+
+    const sourceLocator = "evidence/source.txt";
+    const initialText = "benchmark result: PASS\ninitial source revision\n";
+    const changedText = "benchmark result: FAIL\nchanged source revision\n";
+    const initialDigest = createHash("sha256").update(initialText, "utf8").digest("hex");
+    const changedDigest = createHash("sha256").update(changedText, "utf8").digest("hex");
+    await mkdir(join(root, "evidence"), { recursive: true });
+    await writeFile(join(root, sourceLocator), initialText, "utf8");
+    const captured = await executeOperation(root, {
+      op: "capture_source",
+      kb: "shared",
+      locator: sourceLocator,
+      actor: "human:source"
+    });
+    const capturedData = captured.data as {
+      source: { id: string; nodeId: string; currentObservationId?: string; currentDigest?: string };
+      observation: { id: string; digest?: string; observedText?: string };
+      evidence: { id: string; sourceId: string; observationId: string };
+    };
+    assert.equal(capturedData.observation.digest, initialDigest);
+    assert.equal(capturedData.observation.observedText, initialText);
+    assert.equal(capturedData.evidence.observationId, capturedData.observation.id);
+
+    const claim = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "The benchmark passes",
+      body: "The retained benchmark supports a passing result.",
+      actor: "human:author"
+    });
+    const claimId = (claim.data as { node: { id: string } }).node.id;
+    await executeOperation(root, {
+      op: "justify",
+      kb: "shared",
+      conclusion: claimId,
+      groups: [[capturedData.evidence.id]],
+      rationale: "The retained benchmark observation supports the claim.",
+      actor: "human:author"
+    });
+    const decision = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "decision",
+      title: "Choose the passing checkout design",
+      body: "Select the design represented by the passing benchmark.",
+      basis: [claimId],
+      actor: "human:author"
+    });
+    const decisionId = (decision.data as { node: { id: string } }).node.id;
+    const artifactLocator = "adr.md";
+    await writeFile(join(root, artifactLocator), "# Checkout decision\n\nThe benchmark passes.\n", "utf8");
+    const artifact = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "artifact",
+      title: "Checkout ADR",
+      body: "The generated ADR records the checkout decision.",
+      basis: [decisionId],
+      fields: { locator: artifactLocator },
+      actor: "human:author"
+    });
+    const artifactId = (artifact.data as { node: { id: string } }).node.id;
+    const historicalRevision = artifact.revision;
+    const fixedEvaluationTime = "2026-09-10T12:00:00Z";
+    const historicalWhyBefore = await executeOperation(root, {
+      op: "why",
+      nodeId: artifactId,
+      kb: "shared",
+      revision: historicalRevision,
+      evaluationTime: fixedEvaluationTime
+    });
+    assert.equal((historicalWhyBefore.data as { support: { status: string } }).support.status, "usable");
+
+    await writeFile(join(root, sourceLocator), changedText, "utf8");
+    const refreshed = await executeOperation(root, {
+      op: "refresh",
+      kb: "shared",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh",
+      evaluationTime: "2026-09-10T13:00:00Z"
+    });
+    assert.equal(refreshed.revision, historicalRevision + 1);
+    const refreshData = refreshed.data as {
+      changed: boolean;
+      sources: Array<{ id: string; currentObservationId?: string; currentDigest?: string }>;
+      observations: Array<{ id: string; sourceId: string; digest?: string; observedText?: string; observedBytesDigest?: string; providerRevision?: string }>;
+      changes: Array<{ id: string; sourceId: string; beforeObservationId?: string; afterObservationId?: string; beforeDigest?: string; afterDigest?: string; reason: string }>;
+      reviews: Array<{ id: string; nodeId: string; triggerType: string; triggerId: string; status: string }>;
+    };
+    assert.equal(refreshData.changed, true);
+    assert.equal(refreshData.sources.length, 1);
+    assert.equal(refreshData.sources[0]?.id, capturedData.source.id);
+    assert.equal(refreshData.sources[0]?.currentDigest, changedDigest);
+    assert.equal(refreshData.observations.length, 1);
+    const newObservation = refreshData.observations[0];
+    assert.ok(newObservation);
+    assert.notEqual(newObservation.id, capturedData.observation.id);
+    assert.equal(newObservation.sourceId, capturedData.source.id);
+    assert.equal(newObservation.digest, changedDigest);
+    assert.equal(newObservation.observedText, changedText);
+    assert.equal(newObservation.observedBytesDigest, changedDigest);
+    assert.equal(newObservation.providerRevision, `sha256:${changedDigest}`);
+    assert.equal(refreshData.changes.length, 1);
+    const change = refreshData.changes[0];
+    assert.ok(change);
+    assert.equal(change.sourceId, capturedData.source.id);
+    assert.equal(change.beforeObservationId, capturedData.observation.id);
+    assert.equal(change.afterObservationId, newObservation.id);
+    assert.equal(change.beforeDigest, initialDigest);
+    assert.equal(change.afterDigest, changedDigest);
+    assert.equal(change.reason, "content_changed");
+
+    const expectedReviewNodeIds = new Set([capturedData.evidence.id, claimId, decisionId, artifactId]);
+    assert.deepEqual(new Set(refreshData.reviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(refreshData.reviews.every((review) => review.triggerType === "change" && review.triggerId === change.id && review.status === "open"), true);
+
+    const inspected = await executeOperation(root, { op: "inspect_source", sourceId: capturedData.source.id, kb: "shared" });
+    const inspectedData = inspected.data as {
+      source: { id: string; currentObservationId?: string; currentDigest?: string };
+      observations: Array<{ id: string; digest?: string; observedText?: string }>;
+      evidence: Array<{ id: string; sourceId?: string; observationId?: string }>;
+      changes: Array<{ id: string }>;
+    };
+    assert.equal(inspectedData.source.currentObservationId, newObservation.id);
+    assert.equal(inspectedData.source.currentDigest, changedDigest);
+    assert.deepEqual(inspectedData.observations.map((observation) => observation.id), [capturedData.observation.id, newObservation.id]);
+    assert.equal(inspectedData.observations[0]?.digest, initialDigest);
+    assert.equal(inspectedData.observations[0]?.observedText, initialText);
+    assert.equal(inspectedData.observations[1]?.digest, changedDigest);
+    assert.equal(inspectedData.observations[1]?.observedText, changedText);
+    assert.equal(inspectedData.evidence.length, 2);
+    const newEvidence = inspectedData.evidence.find((evidence) => evidence.observationId === newObservation.id);
+    assert.ok(newEvidence);
+    assert.equal(newEvidence.sourceId, capturedData.source.id);
+    assert.deepEqual(inspectedData.changes.map((entry) => entry.id), [change.id]);
+
+    const evidenceQuery = await executeOperation(root, { op: "evidence", sourceId: capturedData.source.id, kb: "shared" });
+    const evidenceData = evidenceQuery.data as {
+      source: { id: string };
+      observations: Array<{ id: string }>;
+      evidence: Array<{ id: string; observationId?: string }>;
+      changes: Array<{ id: string; beforeObservationId?: string; afterObservationId?: string }>;
+    };
+    assert.equal(evidenceData.source.id, capturedData.source.id);
+    assert.deepEqual(evidenceData.observations.map((observation) => observation.id), [capturedData.observation.id, newObservation.id]);
+    assert.deepEqual(evidenceData.evidence.map((entry) => entry.observationId), [capturedData.observation.id, newObservation.id]);
+    assert.deepEqual(evidenceData.changes.map((entry) => ({ id: entry.id, before: entry.beforeObservationId, after: entry.afterObservationId })), [{ id: change.id, before: capturedData.observation.id, after: newObservation.id }]);
+
+    const changedQuery = await executeOperation(root, { op: "changed", sourceId: capturedData.source.id, kb: "shared" });
+    const changedData = changedQuery.data as {
+      sources: Array<{ id: string }>;
+      observations: Array<{ id: string; digest?: string }>;
+      changes: Array<{ id: string }>;
+    };
+    assert.deepEqual(changedData.sources.map((source) => source.id), [capturedData.source.id]);
+    assert.deepEqual(changedData.observations.map((observation) => ({ id: observation.id, digest: observation.digest })), [{ id: capturedData.observation.id, digest: initialDigest }, { id: newObservation.id, digest: changedDigest }]);
+    assert.deepEqual(changedData.changes.map((entry) => entry.id), [change.id]);
+
+    const impact = await executeOperation(root, {
+      op: "impact",
+      nodeId: capturedData.source.nodeId,
+      kb: "shared",
+      evaluationTime: "2026-09-10T13:00:00Z"
+    });
+    const impactData = impact.data as {
+      node: { id: string };
+      affected: Array<{ node: { id: string }; paths: string[][]; reasons: string[] }>;
+      changes: Array<{ id: string }>;
+      reviews: Array<{ nodeId: string; triggerId: string; status: string }>;
+    };
+    const expectedImpactPaths = new Map<string, string[][]>([
+      [capturedData.evidence.id, [[capturedData.source.nodeId, capturedData.evidence.id]]],
+      [newEvidence.id, [[capturedData.source.nodeId, newEvidence.id]]],
+      [claimId, [[capturedData.source.nodeId, capturedData.evidence.id, claimId]]],
+      [decisionId, [[capturedData.source.nodeId, capturedData.evidence.id, claimId, decisionId]]],
+      [artifactId, [[capturedData.source.nodeId, capturedData.evidence.id, claimId, decisionId, artifactId]]]
+    ]);
+    assert.equal(impactData.node.id, capturedData.source.nodeId);
+    assert.deepEqual(new Set(impactData.affected.map((entry) => entry.node.id)), new Set(expectedImpactPaths.keys()));
+    for (const entry of impactData.affected) {
+      assert.deepEqual(entry.paths, expectedImpactPaths.get(entry.node.id));
+      assert.equal(entry.reasons.length > 0, true);
+    }
+    assert.deepEqual(impactData.changes.map((entry) => entry.id), [change.id]);
+    assert.deepEqual(new Set(impactData.reviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(impactData.reviews.every((review) => review.triggerId === change.id && review.status === "open"), true);
+
+    const reviewQuery = await executeOperation(root, { op: "review", kb: "shared" });
+    const reviewData = reviewQuery.data as {
+      reviews: Array<{ nodeId: string; triggerType: string; triggerId: string; status: string }>;
+      changes: Array<{ id: string }>;
+    };
+    assert.deepEqual(new Set(reviewData.reviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(reviewData.reviews.every((review) => review.triggerType === "change" && review.triggerId === change.id && review.status === "open"), true);
+    assert.deepEqual(reviewData.changes.map((entry) => entry.id), [change.id]);
+
+    const currentWhy = await executeOperation(root, {
+      op: "why",
+      nodeId: artifactId,
+      kb: "shared",
+      evaluationTime: "2026-09-10T13:00:00Z"
+    });
+    const currentWhyData = currentWhy.data as {
+      support: { status: string };
+      reviews: Array<{ nodeId: string; status: string }>;
+      changes: Array<{ id: string }>;
+      evidence: Array<{ id: string }>;
+      observations: Array<{ id: string }>;
+    };
+    assert.equal(currentWhyData.support.status, "pending");
+    assert.deepEqual(new Set(currentWhyData.reviews.map((review) => review.nodeId)), expectedReviewNodeIds);
+    assert.equal(currentWhyData.reviews.every((review) => review.status === "open"), true);
+    assert.deepEqual(currentWhyData.changes.map((entry) => entry.id), [change.id]);
+    assert.equal(currentWhyData.evidence.some((entry) => entry.id === capturedData.evidence.id), true);
+    assert.equal(currentWhyData.evidence.some((entry) => entry.id === newEvidence.id), true);
+    assert.equal(currentWhyData.observations.some((entry) => entry.id === capturedData.observation.id), true);
+    assert.equal(currentWhyData.observations.some((entry) => entry.id === newObservation.id), true);
+
+    const historicalWhyAfter = await executeOperation(root, {
+      op: "why",
+      nodeId: artifactId,
+      kb: "shared",
+      revision: historicalRevision,
+      evaluationTime: fixedEvaluationTime
+    });
+    assert.deepEqual(historicalWhyAfter, historicalWhyBefore);
+
+    const unchangedRefresh = await executeOperation(root, {
+      op: "refresh",
+      kb: "shared",
+      sourceIds: [capturedData.source.id],
+      actor: "human:refresh",
+      evaluationTime: "2026-09-10T14:00:00Z"
+    });
+    assert.equal(unchangedRefresh.revision, refreshed.revision);
+    const unchangedData = unchangedRefresh.data as { changed: boolean; observations: unknown[]; changes: unknown[]; reviews: unknown[] };
+    assert.equal(unchangedData.changed, false);
+    assert.deepEqual(unchangedData.observations, []);
+    assert.deepEqual(unchangedData.changes, []);
+    assert.deepEqual(unchangedData.reviews, []);
+    const reviewsAfterUnchanged = await executeOperation(root, { op: "review", kb: "shared" });
+    assert.deepEqual((reviewsAfterUnchanged.data as { reviews: Array<{ nodeId: string }> }).reviews.map((review) => review.nodeId), reviewData.reviews.map((review) => review.nodeId));
+
+    const secondProjectAfter = await executeOperation(secondRoot, { op: "knowledge_bases" });
+    assert.equal(secondProjectAfter.revision, secondProjectBefore.revision);
+    await assert.rejects(
+      executeOperation(secondRoot, { op: "why", nodeId: artifactId, kb: "shared", evaluationTime: "2026-09-10T13:00:00Z" }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "NOT_FOUND");
+        return true;
+      }
+    );
+    await assert.rejects(
+      executeOperation(root, { op: "why", nodeId: foreignNodeId, kb: "shared", evaluationTime: "2026-09-10T13:00:00Z" }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "NOT_FOUND");
+        return true;
+      }
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(secondRoot, { recursive: true, force: true });
+  }
+});
+
 test("rejects a justification that would close a support cycle", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-runtime-cycle-"));
   try {

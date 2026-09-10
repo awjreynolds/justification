@@ -81,6 +81,95 @@ artifact. Its node fields include `originalBasisJustificationId` and
 render the original basis, readable ID links, rationale and retained source
 locator in the body as well as preserving IDs in the `justification` profile.
 
+## Source-change maintenance result shapes
+
+Source maintenance uses the same `{ revision, data }` envelope. The arrays
+below contain durable records, are scoped to the requested project and KB, and
+are sorted deterministically by their IDs unless an operation says that an
+array is chronological. A refresh that observes no change does not commit a
+revision and returns empty `observations`, `changes` and `reviews` arrays.
+
+`refresh` checks the selected sources and, when content or availability
+changes, retains only the newly created observations and change records in its
+result. `sources` contains the resulting source records for the selection;
+`changed` identifies whether at least one source state changed.
+
+```json
+{
+  "refresh": {
+    "changed": true,
+    "sources": [{ "id": "source-id", "currentObservationId": "new-observation-id" }],
+    "observations": [{ "id": "new-observation-id", "sourceId": "source-id", "observedText": "...", "digest": "..." }],
+    "changes": [{ "id": "change-id", "sourceId": "source-id", "beforeObservationId": "old-observation-id", "afterObservationId": "new-observation-id", "reason": "content_changed" }],
+    "reviews": [{ "id": "review-id", "nodeId": "claim-id", "triggerType": "change", "triggerId": "change-id", "status": "open" }]
+  }
+}
+```
+
+`impact` starts at the requested node and returns every conservative
+downstream dependent. Each `paths` entry is an inclusive node-ID path from the
+requested node to the affected node. `reasons` contains one or more
+human-readable explanations for why that path is affected. When the requested
+node is a source, every retained evidence node for that source is included,
+including historical and newly captured observations; only the prior evidence
+and its downstream dependents receive change reviews. The expected chain is
+therefore `source → evidence → claim → decision → artifact`.
+
+```json
+{
+  "impact": {
+    "node": { "id": "source-node-id", "kind": "source" },
+    "affected": [
+      { "node": { "id": "old-evidence-id" }, "paths": [["source-node-id", "old-evidence-id"]], "reasons": ["source observation changed"] },
+      { "node": { "id": "new-evidence-id" }, "paths": [["source-node-id", "new-evidence-id"]], "reasons": ["source observation retained"] },
+      { "node": { "id": "claim-id" }, "paths": [["source-node-id", "old-evidence-id", "claim-id"]], "reasons": ["support depends on changed evidence"] },
+      { "node": { "id": "decision-id" }, "paths": [["source-node-id", "old-evidence-id", "claim-id", "decision-id"]], "reasons": ["basis depends on changed claim"] },
+      { "node": { "id": "artifact-id" }, "paths": [["source-node-id", "old-evidence-id", "claim-id", "decision-id", "artifact-id"]], "reasons": ["basis depends on changed decision"] }
+    ],
+    "changes": [{ "id": "change-id", "sourceId": "source-id" }],
+    "reviews": [{ "id": "review-id", "nodeId": "claim-id", "triggerId": "change-id", "status": "open" }]
+  }
+}
+```
+
+Source and evidence inspection expose the durable provenance needed to
+reproduce a change. `inspect_source` returns the selected `source`, all of its
+chronological `observations`, linked `evidence` nodes and its `changes`.
+`evidence` has the same arrays and accepts either `evidenceId` or `sourceId`.
+`changed` returns the selected `sources`, chronological `observations` and
+recorded `changes`; it does not read a transient cache.
+
+```json
+{
+  "inspect_source": {
+    "source": { "id": "source-id", "currentObservationId": "new-observation-id" },
+    "observations": [{ "id": "old-observation-id" }, { "id": "new-observation-id" }],
+    "evidence": [{ "id": "old-evidence-id" }, { "id": "new-evidence-id" }],
+    "changes": [{ "id": "change-id", "beforeObservationId": "old-observation-id", "afterObservationId": "new-observation-id" }]
+  },
+  "evidence": {
+    "source": { "id": "source-id" },
+    "observations": [{ "id": "old-observation-id" }, { "id": "new-observation-id" }],
+    "evidence": [{ "id": "old-evidence-id" }, { "id": "new-evidence-id" }],
+    "changes": [{ "id": "change-id" }]
+  },
+  "changed": {
+    "sources": [{ "id": "source-id" }],
+    "observations": [{ "id": "old-observation-id" }, { "id": "new-observation-id" }],
+    "changes": [{ "id": "change-id" }]
+  }
+}
+```
+
+`review` without a `reviewId` lists review records in the selected scope:
+`data` is `{ "reviews": ReviewRecord[], "changes": ChangeRecord[] }`.
+The `why` response retains its historical explanation fields and adds
+`reviews`, `changes`, `evidence` and `observations` arrays for the current
+scope. A source change makes the retained old evidence pending in a current
+`why` assessment while its open reviews remain independently visible. A
+historical `why` at the committed pre-change revision reads only that revision
+and remains byte-for-byte equivalent to the earlier response.
+
 The initial file provider hashes the exact captured UTF-8 bytes with SHA-256.
 An observation exposes that digest as `observedBytesDigest`, uses the same
 content address as its `digest` for text, and records

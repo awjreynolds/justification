@@ -145,6 +145,31 @@ case-insensitive path collisions before completing scope acceptance.
   the pinned Node v24.21.0 toolchain on 2026-09-10, and the lockfile has no
   uncommitted changes.
 
+## Delivery decisions recorded by the source-maintenance slice
+
+- `capture_source` and `refresh` share one durable source-transition path.
+  A source identity remains bound to its provider and locator; changed content
+  or availability creates a new immutable observation, present-content
+  evidence and a `ChangeRecord`. The source's operational `lastCheckedAt` is
+  changed only when a semantic transition is committed, so unchanged refresh
+  is revision-idempotent.
+- Change reviews attach to the prior evidence and its downstream support or
+  typed dependency records. New evidence is retained for impact and history
+  without silently replacing the old basis. Restoration with the same digest
+  and provider revision makes retained evidence usable again while the open
+  review remains an independent acknowledgment item.
+- Source and evidence inspection, changed-source enumeration, impact paths and
+  review listing read the validated append-only state directly. `why` adds
+  scoped review/change records and every retained observation for sources in
+  the support tree; selecting a historical revision keeps these arrays tied to
+  that immutable snapshot. Unknown KB names are resolved case-sensitively
+  before shared-node visibility is granted.
+- The source-maintenance implementation was exercised through the public
+  runtime using real temporary project files. The focused runtime slice passed
+  21 tests with the pinned Node v24.21.0 build and typecheck; the full package
+  run's unrelated recovery/request-validation failures remain owned by those
+  slices.
+
 ## Out of scope
 
 - The broader vision beyond the original MVP: the delivery limits in the implementation contract remain explicit.
