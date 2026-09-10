@@ -3,7 +3,7 @@
 Type: grilling
 Label: wayfinder:grilling
 Mode: HITL
-Status: claimed
+Status: resolved
 Assignee: awjreynolds
 Parent: [Find the route to a traceable Justification MVP](../map.md)
 Blocked by: 04, 06, 07, 08, 09, 10, 11
@@ -15,3 +15,9 @@ Prerequisites: [Agree the smallest ADR demonstration that proves the product](04
 The user has requested TDD. Consult the [TDD proposal](../../../docs/planning/tdd-plan.md); confirm its test seams before writing tests. Plan one failing behavioral test followed by its minimum implementation per cycle, using Luna max. Astra medium reviews the resulting changes and any refactoring. Do not batch-write speculative tests.
 
 Once the design decisions are resolved, what is the smallest sequence of independently reviewable Luna-max changes that delivers the ADR proof? Specify inputs, ownership boundaries, acceptance fixtures and completion gates for each stage; use Astra-medium code review with findings returned to Luna and re-review after material fixes. Include cold rebuild equivalence, no-change refresh, changed/deleted/unavailable sources, alternative supports, scoped contradiction/promotion conflict, artifact drift and multi-project isolation. Also test similarly worded claims that coexist because their subject/version/time applicability differs. Determine which hard-to-reverse tradeoffs warrant ADRs and where the optional agent skill enters. Do not call this handoff ready while design blockers remain open.
+
+## Answer
+
+Resolved on 2026-09-10 under the user’s instruction to continue until complete. Routine contract choices are agent decisions; execution claims below have recorded tool evidence.
+
+Confirmed seams remain runtime, process CLI and actual MCP clients. Luna max implements sequential observed behavioral red/minimum-green cycles; Astra medium independently reviews Standards and Spec at fixed commits. First foundation review caught storage/serializer/reference-validation defects and honestly recorded a pre-test foundation-code deviation. Correct these through public regressions, then complete source-to-ADR, refresh/history/alternatives, conflicts/scope, rebuild/context/audit and transport proof; run packaged demo and final review before delivery. See docs/implementation/runtime-foundation-review.md. No later work is declared complete merely by this planning resolution.

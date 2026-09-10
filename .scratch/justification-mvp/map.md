@@ -36,12 +36,34 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
 - [Choose artifact assertion anchors and acceptable drift behavior](issues/11-artifact-contract.md): Trace whole artifact to explicit decision/claim basis and acceptance revision, plus project-relative file locator/content digest.
 - [Choose the MCP clients and compatibility baseline the MVP must support](issues/13-client-baseline.md): The bounded baseline is the current released TypeScript SDK client and installed Codex CLI 0.153.4 over local stdio.
 
+- [Verify a pinned MCP SDK against the agreed client matrix](issues/14-client-smoke.md): Pinned SDK server/client 2.0.0 and Zod4.6.1 were exercised over real stdio, with modern2026-07-28 and legacy2025-11-25 discovery, structured calls/errors and restart.
+- [Specify the runtime, CLI and bounded MCP contract](issues/10-runtime-mcp.md): Use TypeScript on the pinned Node24 toolchain and one public executeOperation(root,request) dispatcher returning revision/data.
+- [Agree the implementation sequence and evidence required at each review](issues/12-implementation-handoff.md): Confirmed seams remain runtime, process CLI and actual MCP clients.
+
 ## Remaining delivery work
 
 - Complete Luna-max runtime/CLI/MCP red–green cycles and capture executable evidence.
-- Record actual SDK/Codex compatibility and settle the transport dependency from the experiment.
+- Production multi-project schemas/calls remain to be verified; the SDK/Codex fixture compatibility experiment is complete.
 - Run independent Astra-medium code reviews, fix material findings through Luna and re-review.
 - Ship the runnable ADR example, operation/backup documentation and optional agent skill; verify packaged installation and push reviewed work.
+
+## Delivery decisions recorded by the examples/documentation slice
+
+- The worked fixture uses a fictional checkout-cache benchmark with one shared
+  latency constraint, three options, one retained file observation, an
+  attributed claim, a Redis decision and a whole-file ADR artifact. The example
+  keeps IDs runtime-generated and checks independent expected values rather than
+  mirroring internal graph traversal.
+- `examples/adr-demo.mjs` creates a temporary workspace by default and accepts
+  `--root` only for an empty directory. It leaves the generated workspace in
+  place so the printed native history and projection paths can be inspected.
+  It imports the built public package and does not add a package script or
+  dependency.
+- User-facing recovery guidance treats numbered `justification-history/`
+  revisions as authority, `kb/` as a current OKF projection and
+  `.justification/` as disposable. It names only typed errors and layouts
+  observed in the implementation/contract; runtime-specific response wording
+  remains owned by the implementation slice.
 
 ## Out of scope
 
