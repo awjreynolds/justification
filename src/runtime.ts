@@ -565,6 +565,9 @@ async function handleJustify(root: string, request: Extract<RuntimeRequest, { op
   const conclusion = visibleNode(state, request.conclusion, request.kb);
   const kb = request.kb ?? conclusion.kb;
   findKb(state, kb);
+  if (kb !== conclusion.kb) {
+    throw new RuntimeError("SCOPE_VIOLATION", `justification ownership ${kb} does not match conclusion knowledge base ${conclusion.kb}`, { conclusion: conclusion.id, conclusionKb: conclusion.kb, justificationKb: kb });
+  }
   const groups = normalizeGroups(request.groups);
   for (const group of groups) {
     for (const premise of group.premises) {
@@ -626,7 +629,7 @@ function assessNode(state: ProjectState, nodeId: string, evaluationTime: string,
     if (source?.availability === "present" && observation?.availability === "present" && source.currentObservationId === observation.id && source.currentDigest === observation.digest) return { status: "usable", reason: "retained evidence matches the current source observation" };
     return { status: "pending", reason: "retained evidence is historical or its source is unavailable" };
   }
-  const justifications = Object.values(state.justifications).filter((j) => j.conclusion === nodeId);
+  const justifications = Object.values(state.justifications).filter((j) => j.conclusion === nodeId && j.kb === node.kb);
   if (justifications.length === 0) return { status: "pending", reason: "no declared support basis" };
   const nextStack = new Set(stack);
   nextStack.add(nodeId);
@@ -662,7 +665,9 @@ async function handleWhy(root: string, request: Extract<RuntimeRequest, { op: "w
   const state = revision.state;
   const node = visibleNode(state, request.nodeId, request.kb);
   const evaluationTime = atTime(request.evaluationTime ?? revision.committedAt);
-  const justifications = Object.values(state.justifications).filter((j) => j.conclusion === node.id).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  const justifications = Object.values(state.justifications)
+    .filter((j) => j.conclusion === node.id && j.kb === node.kb)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   const originalId = node.fields?.originalBasisJustificationId;
   const originalJustification = typeof originalId === "string" && hasOwn(state.justifications as Record<string, unknown>, originalId) ? state.justifications[originalId] : undefined;
   const supportTree = buildSupportTree(state, node.id);

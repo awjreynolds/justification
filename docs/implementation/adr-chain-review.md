@@ -48,8 +48,6 @@ The reviewer also identified duplicate semantic traversal in the runtime and
 serializer. Review-stage refactoring should give both a shared traversal or
 reasoning representation while keeping Markdown rendering in the serializer.
 
-Correction validation and re-review are pending.
-
 ## Correction validation
 
 The five accepted findings now have public regression coverage and minimum
@@ -59,4 +57,38 @@ expired justifications no longer mark their groups usable; and export output
 contains relative source/premise links plus structured support, relationship
 and provenance records. The pinned Node v24.21.0 build and complete suite pass
 `47` tests with `0` failures. Independent Astra re-review of the corrected
-range remains the next review gate.
+range `b61fce8...0dc2ddd` closed the source-ID, projection-error, applicability
+and link-format findings. It also confirmed that the transaction lock stays
+held through projection publication and is released on success or failure.
+
+The scope finding remains open in two narrower forms, both reproduced by the
+Spec reviewer. A child-owned justification with entirely shared endpoints can
+still appear in a sibling's `why` response. A shared document can also expose
+an incoming child-owned relationship and its rationale during sibling export.
+These require ownership checks on justification and relationship records,
+alongside node visibility. Both corrections were assigned to Luna as public
+regression cycles.
+
+The Standards reviewer accepted the prior assertion and traversal fixes, and
+requested one isolated coverage case: reuse the same source ID and locator
+from the wrong child, so the owning-KB guard is exercised independently of the
+locator guard. This is a test-quality correction; no new hard process
+violation was found.
+
+## Scope re-review corrections
+
+The two narrower P1 scope leaks now have public red-green regressions. A
+justification must be owned by the same KB as its conclusion, and runtime
+queries, support traversal and serialization exclude malformed
+out-of-scope justifications. Child-owned relationships are serialized on the
+owning child document and excluded from shared documents in sibling exports.
+
+A related scoped-export P1 is also corrected: a scoped export carries forward
+manifest ownership entries for generated files outside the selected KB, so a
+later mutation can republish all generated documents without a false
+`PROJECTION_FAILED`. The source-ID same-locator wrong-KB fixture passes
+immediately against the existing guard and records no historical RED.
+
+The three new focused regressions pass under Node v24.21.0, and the complete
+suite now passes `50` tests with `0` failures. The request-schema worker's
+separate validation experiment is intentionally outside this bounded scope.

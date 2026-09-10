@@ -327,6 +327,145 @@ test("rejects child-scoped support that would make a shared conclusion leak", as
   }
 });
 
+test("rejects child-owned support for a shared conclusion even with shared premises", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-shared-owned-support-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, { op: "create_kb", id: "child-a", title: "Child A", actor: "human:test" });
+    await executeOperation(root, { op: "create_kb", id: "child-b", title: "Child B", actor: "human:test" });
+    const premise = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "requirement",
+      title: "Shared premise",
+      body: "Every child can use this accepted premise.",
+      fields: { accepted: true },
+      actor: "human:test"
+    });
+    const premiseId = (premise.data as { node: { id: string } }).node.id;
+    const conclusion = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "claim",
+      title: "Shared conclusion",
+      body: "This conclusion must have shared ownership.",
+      actor: "human:test"
+    });
+    const conclusionId = (conclusion.data as { node: { id: string } }).node.id;
+    const beforeRejected = await executeOperation(root, { op: "knowledge_bases" });
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "justify",
+        kb: "child-a",
+        conclusion: conclusionId,
+        groups: [[premiseId]],
+        rationale: "Child A's rationale must not support a shared conclusion.",
+        actor: "human:test"
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "SCOPE_VIOLATION");
+        return true;
+      }
+    );
+
+    const afterRejected = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(afterRejected.revision, beforeRejected.revision);
+    const siblingView = await executeOperation(root, { op: "why", nodeId: conclusionId, kb: "child-b" });
+    const siblingData = siblingView.data as {
+      support: { status: string };
+      currentSupport: Array<{ justification: { rationale: string } }>;
+    };
+    assert.equal(siblingData.support.status, "pending");
+    assert.deepEqual(siblingData.currentSupport, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("keeps child-owned relationships out of a sibling shared export", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-shared-export-scope-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, { op: "create_kb", id: "child-a", title: "Child A", actor: "human:test" });
+    await executeOperation(root, { op: "create_kb", id: "child-b", title: "Child B", actor: "human:test" });
+    const sharedTarget = await executeOperation(root, {
+      op: "record",
+      kb: "shared",
+      kind: "requirement",
+      title: "Shared target",
+      body: "The target is visible to both children.",
+      actor: "human:test"
+    });
+    const sharedTargetId = (sharedTarget.data as { node: { id: string } }).node.id;
+    const childClaim = await executeOperation(root, {
+      op: "record",
+      kb: "child-a",
+      kind: "claim",
+      title: "Child A claim",
+      body: "This claim is visible only to child A.",
+      links: [{ to: sharedTargetId, type: "references", rationale: "Child A private relationship rationale." }],
+      actor: "human:test"
+    });
+    const childClaimData = childClaim.data as { node: { id: string } };
+
+    await executeOperation(root, { op: "export", kb: "child-a" });
+    const ownerDocument = await readFile(join(root, "kb", "child-a", `${childClaimData.node.id}.md`), "utf8");
+    const ownerClosing = ownerDocument.indexOf("\n---\n", 4);
+    const ownerFrontmatter = parseDocument(ownerDocument.slice(4, ownerClosing)).toJSON() as {
+      justification?: { relationships?: Array<Record<string, unknown>> };
+    };
+    assert.equal(ownerFrontmatter.justification?.relationships?.length, 1);
+    assert.equal(ownerFrontmatter.justification?.relationships?.[0]?.from, childClaimData.node.id);
+    assert.equal(ownerFrontmatter.justification?.relationships?.[0]?.to, sharedTargetId);
+
+    await executeOperation(root, { op: "export", kb: "child-b" });
+    const siblingDocument = await readFile(join(root, "kb", "shared", `${sharedTargetId}.md`), "utf8");
+    const siblingClosing = siblingDocument.indexOf("\n---\n", 4);
+    const siblingFrontmatter = parseDocument(siblingDocument.slice(4, siblingClosing)).toJSON() as {
+      justification?: { relationships?: Array<Record<string, unknown>> };
+    };
+    assert.equal(siblingDocument.includes(childClaimData.node.id), false);
+    assert.equal(siblingDocument.includes("Child A private relationship rationale."), false);
+    assert.deepEqual(siblingFrontmatter.justification?.relationships ?? [], []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("scoped export preserves untouched generated ownership for later mutations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-runtime-scoped-export-ownership-"));
+  try {
+    await initializeProject(root);
+    await executeOperation(root, { op: "create_kb", id: "child-a", title: "Child A", actor: "human:test" });
+    await executeOperation(root, { op: "create_kb", id: "child-b", title: "Child B", actor: "human:test" });
+    await executeOperation(root, {
+      op: "record",
+      kb: "child-a",
+      kind: "claim",
+      title: "First child claim",
+      body: "The first child claim is already projected.",
+      actor: "human:test"
+    });
+
+    await executeOperation(root, { op: "export", kb: "child-b" });
+    const beforeMutation = await executeOperation(root, { op: "knowledge_bases" });
+    const secondClaim = await executeOperation(root, {
+      op: "record",
+      kb: "child-a",
+      kind: "claim",
+      title: "Second child claim",
+      body: "A later mutation must republish every generated document safely.",
+      actor: "human:test"
+    });
+    assert.equal(secondClaim.revision, beforeMutation.revision + 1);
+    const secondClaimId = (secondClaim.data as { node: { id: string } }).node.id;
+    assert.equal((await readFile(join(root, "kb", "child-a", `${secondClaimId}.md`), "utf8")).includes("Second child claim"), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("keeps a captured source ID bound to its locator and owning KB", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-runtime-source-identity-"));
   try {
@@ -360,6 +499,22 @@ test("keeps a captured source ID bound to its locator and owning KB", async () =
     );
     const afterRejectedRetarget = await executeOperation(root, { op: "knowledge_bases" });
     assert.equal(afterRejectedRetarget.revision, beforeRejectedRetarget.revision);
+
+    await assert.rejects(
+      executeOperation(root, {
+        op: "capture_source",
+        kb: "child-b",
+        locator: "first.txt",
+        sourceId,
+        actor: "human:test"
+      }),
+      (error: unknown) => {
+        assert.equal((error as { code?: string }).code, "SCOPE_VIOLATION");
+        return true;
+      }
+    );
+    const afterRejectedScope = await executeOperation(root, { op: "knowledge_bases" });
+    assert.equal(afterRejectedScope.revision, afterRejectedRetarget.revision);
 
     const stillFirst = await executeOperation(root, {
       op: "capture_source",

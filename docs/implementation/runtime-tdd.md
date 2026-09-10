@@ -203,8 +203,49 @@ provider, locator and owning KB before fetching or mutating; retargeting now
 returns `CONFLICT`, while a source reused with its original locator remains
 unchanged.
 
+Standards re-review identified that the first regression changed both locator
+and KB, so its `CONFLICT` assertion did not exercise the owning-KB guard. The
+fixture now reuses the original `sourceId` with the original `first.txt`
+locator from `child-b` and independently expects `SCOPE_VIOLATION`; a second
+revision read confirms that this request also leaves durable state unchanged.
+This additional check passed immediately against the existing correction, so
+no historical RED result is claimed.
+
 The focused verification of both public regressions passed, and the complete
-runtime/package suite now passes `47` tests with `0` failures.
+runtime/package suite now passes `50` tests with `0` failures.
+
+## Scope ownership and scoped export corrections: GREEN
+
+The scope re-review found that a child-owned justification could still attach
+to a shared conclusion when all of its premises were shared. The new public
+regression created that exact case and expected a sibling `why` query to show
+no support or child rationale. Before the correction it failed with
+`Missing expected rejection`; the request committed a child-owned
+justification. The minimum fix requires a justification's KB to match its
+conclusion's KB, and the runtime, support tree and serializer now filter
+malformed out-of-scope justification records defensively. The focused
+regression then passed with unchanged revision and an empty sibling support
+result.
+
+The second scope regression recorded a child-A relationship pointing to a
+shared node, exported sibling child B, and independently checked the shared
+document's parsed extension and bytes for the child ID and private rationale.
+Before the correction it failed because the child-owned relationship was
+included on the shared document. Filtering relationships by their owning KB
+keeps the relationship on the child-A document while the sibling export stays
+free of it. The focused test passed after the subsequent scoped-manifest
+correction below was applied.
+
+The scoped-export regression then exposed a separate P1: exporting child B
+replaced the manifest with only B/shared entries while leaving child-A files in
+place, so the next mutation committed history and failed projection preflight
+with `PROJECTION_FAILED`. The minimum fix carries forward prior manifest
+ownership entries for untouched generated files while returning the files
+written by the current export. Its public test now verifies that a later
+child-A mutation publishes successfully and advances exactly one revision.
+
+The three correction regressions pass individually, and the full pinned
+Node v24.21.0 suite passes `50` tests with `0` failures.
 
 ## Post-commit projection failure correction: GREEN
 

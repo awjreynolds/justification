@@ -54,8 +54,9 @@ function sourceDetails(state: ProjectState, node: NodeRecord): Pick<SupportTree,
 }
 
 function orderedJustifications(state: ProjectState, nodeId: string): readonly JustificationRecord[] {
+  const node = state.nodes[nodeId];
   return Object.values(state.justifications)
-    .filter((justification) => justification.conclusion === nodeId)
+    .filter((justification) => justification.conclusion === nodeId && node !== undefined && justification.kb === node.kb)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 }
 

@@ -38,7 +38,7 @@ function nodeLink(from: NodeRecord, target: NodeRecord): string {
 
 function justificationExtension(state: ProjectState, node: NodeRecord, supportTree: SupportTree): Record<string, unknown> {
   const justifications = Object.values(state.justifications)
-    .filter((justification) => justification.conclusion === node.id)
+    .filter((justification) => justification.conclusion === node.id && justification.kb === node.kb)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
     .map((justification) => ({
       id: justification.id,
@@ -52,7 +52,7 @@ function justificationExtension(state: ProjectState, node: NodeRecord, supportTr
       createdAt: justification.createdAt
     }));
   const relationships = Object.values(state.relationships)
-    .filter((relationship) => relationship.from === node.id || relationship.to === node.id)
+    .filter((relationship) => relationship.kb === node.kb && (relationship.from === node.id || relationship.to === node.id))
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((relationship) => ({ ...relationship }));
   const provenance = supportProvenance(supportTree).map(({ source, observation }) => ({
@@ -250,7 +250,8 @@ export async function writeProjection(root: string, state: ProjectState, options
   if (previous && !options.repair) await detectDrift(root, previous);
   const documents = projectDocuments(state, options.generatedAt, options.kb);
   await preflightTargets(root, documents, previous);
-  const files: Record<string, string> = {};
+  const files: Record<string, string> = previous === undefined ? {} : { ...previous };
+  const writtenFiles: string[] = [];
   for (const document of documents) {
     const absolute = join(root, document.relativePath);
     const rootRelative = relative(root, absolute);
@@ -259,14 +260,16 @@ export async function writeProjection(root: string, state: ProjectState, options
     const temporary = `${absolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
     await writeFile(temporary, document.content, "utf8");
     await rename(temporary, absolute);
-    files[document.relativePath.replaceAll("\\", "/")] = sha256(document.content);
+    const path = document.relativePath.replaceAll("\\", "/");
+    files[path] = sha256(document.content);
+    writtenFiles.push(path);
   }
   const manifest = { format: "justification.projection", version: 1, files };
   const manifestAbsolute = join(root, ...MANIFEST_PATH);
   const temporaryManifest = `${manifestAbsolute}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
   await writeFile(temporaryManifest, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
   await rename(temporaryManifest, manifestAbsolute);
-  return { files: Object.keys(files).sort(), manifestDigest: sha256(canonicalJson(manifest)) };
+  return { files: writtenFiles.sort(), manifestDigest: sha256(canonicalJson(manifest)) };
 }
 
 function dirnameFromRelative(path: string): string {

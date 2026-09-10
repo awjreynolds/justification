@@ -108,6 +108,12 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
   extension. The correction evidence is recorded in
   [runtime-tdd.md](../../docs/implementation/runtime-tdd.md) and
   [adr-chain-review.md](../../docs/implementation/adr-chain-review.md).
+- A justification must be owned by the same KB as its conclusion; runtime
+  queries and serialization apply the same ownership rule to malformed state.
+  Relationships are emitted on their owning KB's document, so a child-owned
+  edge pointing to shared knowledge does not appear in a sibling's shared
+  export. Scoped exports carry forward manifest entries for untouched
+  generated files, preserving ownership for later mutations.
 - The dependency lock remains `package-lock.json` lockfile version 3 with the
   pinned project versions. `npm ci --ignore-scripts --dry-run` completed under
   the pinned Node v24.21.0 toolchain on 2026-09-10, and the lockfile has no
