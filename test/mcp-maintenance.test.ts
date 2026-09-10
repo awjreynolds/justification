@@ -380,6 +380,34 @@ test("current MCP SDK preserves maintenance state across refresh and rebuild", a
     assert.equal(refreshed.data.reviews.length, expectedReviewNodeIds.length);
     assert.equal(refreshed.data.reviews.every((review) => review.triggerType === "change" && review.triggerId === change.id && review.status === "open"), true);
 
+    const inspected = success<{
+      revision: number;
+      data: {
+        source: { id: string };
+        observations: Array<{ id: string; sourceId: string; digest: string }>;
+        evidence: Array<{ id: string; sourceId: string; observationId: string; fields: { digest?: string } }>;
+      };
+    }>(await client.callTool({
+      name: "inspect_source",
+      arguments: {
+        project_id: first.id,
+        kb: "research",
+        sourceId: captured.data.source.id
+      }
+    }));
+    assert.equal(inspected.revision, refreshed.revision);
+    assert.equal(inspected.data.source.id, captured.data.source.id);
+    const inspectedObservation = inspected.data.observations.find(({ id }) => id === newObservation.id);
+    assert.ok(inspectedObservation);
+    assert.equal(inspectedObservation.sourceId, captured.data.source.id);
+    assert.equal(inspectedObservation.digest, newObservation.digest);
+    const newEvidence = inspected.data.evidence.find((entry) =>
+      entry.sourceId === inspectedObservation.sourceId &&
+      entry.observationId === inspectedObservation.id &&
+      entry.fields.digest === inspectedObservation.digest
+    );
+    assert.ok(newEvidence);
+
     const impact = success<{
       revision: number;
       data: {
@@ -398,15 +426,15 @@ test("current MCP SDK preserves maintenance state across refresh and rebuild", a
       }
     }));
     assert.equal(impact.data.node.id, captured.data.source.nodeId);
-    const newEvidence = impact.data.affected.find(({ node }) => node.id !== captured.data.evidence.id && node.id !== claimId && node.id !== artifactId);
-    assert.ok(newEvidence);
-    assert.equal(newEvidence.node.kind, "evidence");
-    const expectedAffectedIds = [captured.data.evidence.id, newEvidence.node.id, claimId, artifactId].sort();
+    assert.equal(newEvidence.sourceId, captured.data.source.id);
+    assert.equal(newEvidence.observationId, newObservation.id);
+    assert.equal(newEvidence.fields.digest, changedDigest);
+    const expectedAffectedIds = [captured.data.evidence.id, newEvidence.id, claimId, artifactId].sort();
     assert.deepEqual(impact.data.affected.map(({ node }) => node.id).sort(), expectedAffectedIds);
     const expectedPaths = new Map<string, string[][]>([
       [captured.data.evidence.id, [[captured.data.source.nodeId, captured.data.evidence.id]]]
     ]);
-    expectedPaths.set(newEvidence.node.id, [[captured.data.source.nodeId, newEvidence.node.id]]);
+    expectedPaths.set(newEvidence.id, [[captured.data.source.nodeId, newEvidence.id]]);
     expectedPaths.set(claimId, [[captured.data.source.nodeId, captured.data.evidence.id, claimId]]);
     expectedPaths.set(artifactId, [[captured.data.source.nodeId, captured.data.evidence.id, claimId, artifactId]]);
     for (const entry of impact.data.affected) {

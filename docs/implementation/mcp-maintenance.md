@@ -17,9 +17,13 @@ SHA-256 digests and fixed timestamps verify the captured and artifact content.
 
 The test then changes the source and calls `refresh` for the exact source ID.
 The response reports one new observation, one content change and three open
-dependent reviews. `impact` returns the exact affected evidence, claim and
-artifact IDs, their expected paths, the change and the same review set. A
-second refresh at the changed source state returns the unchanged revision with
+dependent reviews. A public `inspect_source` call then resolves the new
+evidence ID by matching its source, the refresh observation ID and the changed
+digest. The `impact` query returns the exact affected evidence, claim and
+artifact IDs, their expected paths, the change and the same review set, using
+that independently selected ID rather than inferring it from the impact
+response itself. The second refresh at the changed source state returns
+the unchanged revision with
 no new observations, changes or reviews. `why` at a fixed evaluation time
 reports pending current support after the change while its historical response
 at revision `5` remains usable and retains the original observation, basis and
