@@ -1,8 +1,8 @@
 # TDD plan
 
-The user requested TDD after the initial Wayfinder chart. TDD is now the implementation method; the proposed test seams below await user confirmation. This does not resolve the map's open domain, storage or protocol decisions.
+The user requested TDD after the initial Wayfinder chart and confirmed the runtime, CLI and MCP seams on 2026-09-10. TDD is the implementation method. The first behavior is authorized; the broader domain, storage and protocol decisions remain open.
 
-## Proposed test seams
+## Confirmed test seams
 
 | Public interface | Behaviors to observe |
 | --- | --- |
@@ -20,7 +20,7 @@ Published Markdown/OKF exports are observable runtime outputs. Their eventual co
 - when a caller initialises the project through the public runtime interface;
 - then public discovery reports that project and its `shared` KB.
 
-Exact operation signatures and the minimal durable representation are settled before this test is written; the behavior does not select a language or file schema. The test must fail because that behavior is missing, not merely because a dependency or test runner is broken. Implement only enough to pass it.
+The [first-slice contract](first-slice.md) specifies the minimum bootstrap behavior and metadata, leaving the full knowledge format open. The test must fail because that behavior is missing, not merely because a dependency or test runner is broken. Implement only enough to pass it.
 
 ## Subsequent candidate behaviors
 
@@ -44,4 +44,4 @@ Alternative support, applicability, promotion conflicts, artifact drift and rema
 
 ## Confirmation status
 
-Proposed seams: runtime, CLI and MCP as described above. **Pending user confirmation.** No test or application code has been written as part of this proposal.
+**Confirmed by the user on 2026-09-10:** runtime, CLI and MCP as described above, starting with initialisation and discovery. Confirmation also requires checking current best-known methods against primary sources. Reuse this confirmation for work at these seams; ask only if a materially different test seam becomes necessary.

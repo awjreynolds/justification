@@ -1,0 +1,25 @@
+{
+  "name": "justification",
+  "version": "0.1.0",
+  "description": "Local-first project knowledge and justification runtime",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "justification": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test --experimental-strip-types test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4",
+    "typescript": "7.0.2"
+  }
+}

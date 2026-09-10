@@ -1,0 +1,72 @@
+#!/usr/bin/env node
+
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { discoverProjects, initializeProject, ProjectError } from "./index.js";
+
+export interface CliIO {
+  readonly cwd?: string;
+  readonly stdout?: { write(chunk: string): void };
+  readonly stderr?: { write(chunk: string): void };
+}
+
+const usage = "Usage: justification init [directory] | justification projects <directory>...";
+
+export async function runCli(
+  argv: readonly string[],
+  io: CliIO = { stdout: process.stdout, stderr: process.stderr }
+): Promise<number> {
+  const stdout = io.stdout ?? process.stdout;
+  const stderr = io.stderr ?? process.stderr;
+  const cwd = io.cwd ?? process.cwd();
+  const [command, ...arguments_] = argv;
+
+  try {
+    if (command === "init") {
+      if (arguments_.length > 1) {
+        return writeError(stderr, "INVALID_REQUEST", "init accepts at most one directory");
+      }
+
+      const project = await initializeProject(arguments_[0] ?? cwd);
+      stdout.write(`${JSON.stringify(project, null, 2)}\n`);
+      return 0;
+    }
+
+    if (command === "projects") {
+      if (arguments_.length === 0) {
+        return writeError(stderr, "INVALID_REQUEST", "projects requires at least one directory");
+      }
+
+      const projects = await discoverProjects(arguments_);
+      stdout.write(`${JSON.stringify({ projects }, null, 2)}\n`);
+      return 0;
+    }
+
+    return writeError(stderr, "INVALID_REQUEST", usage);
+  } catch (error) {
+    if (error instanceof ProjectError) {
+      return writeError(stderr, error.code, error.message);
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return writeError(stderr, "COMMAND_FAILED", message);
+  }
+}
+
+function writeError(
+  stderr: { write(chunk: string): void },
+  code: string,
+  message: string
+): number {
+  stderr.write(`${JSON.stringify({ error: { code, message } })}\n`);
+  return 1;
+}
+
+const invokedFile = process.argv[1] === undefined ? undefined : realpathSync(process.argv[1]);
+const moduleFile = realpathSync(fileURLToPath(import.meta.url));
+if (invokedFile === moduleFile) {
+  runCli(process.argv.slice(2)).then((status) => {
+    process.exitCode = status;
+  });
+}
