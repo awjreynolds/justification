@@ -26,6 +26,7 @@ import type {
   SourceRecord
 } from "./domain.ts";
 import { ensureHistory, readHistory, transact } from "./storage.ts";
+import { ProjectionError, writeProjection } from "./serializer.ts";
 
 export type RuntimeErrorCode =
   | "INVALID_REQUEST"
@@ -79,7 +80,7 @@ export type RuntimeRequest =
   | ({ op: "resolve_conflict"; contradictionId: string; resolution: "supersession" | "different_scope" | "different_time" | "source_error" | "unresolved"; rationale: string } & ActorRequest)
   | { op: "audit"; kb?: string; evaluationTime?: string }
   | ({ op: "rebuild" } & Partial<ActorRequest>)
-  | { op: "export"; kb?: string; outputDir?: string };
+  | { op: "export"; kb?: string; outputDir?: string; repair?: boolean };
 
 export type RuntimeResponse<T = unknown> = {
   readonly revision: number;
@@ -120,6 +121,10 @@ function kbDescriptor(root: string, kb: KnowledgeBaseRecord, inherited: boolean)
   return { ...kb, inherited, root: join(root, "kb", kb.id) };
 }
 
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
 async function ensureChildDirectory(root: string, id: string): Promise<void> {
   const kbRoot = join(root, "kb");
   const kbInfo = await lstat(kbRoot).catch(() => undefined);
@@ -136,7 +141,8 @@ async function ensureChildDirectory(root: string, id: string): Promise<void> {
 }
 
 function findKb(state: ProjectState, id: string): KnowledgeBaseRecord {
-  const kb = state.kbs[id];
+  const kbs = state.kbs as Record<string, KnowledgeBaseRecord>;
+  const kb = hasOwn(kbs as Record<string, unknown>, id) ? kbs[id] : undefined;
   if (!kb) throw new RuntimeError("NOT_FOUND", `knowledge base not found: ${id}`, { id });
   return kb;
 }
@@ -175,6 +181,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
     if (current.state.kbs[request.id]) throw new RuntimeError("CONFLICT", `knowledge base already exists: ${request.id}`, { id: request.id });
     const parent = request.parent ?? "shared";
     findKb(current.state, parent);
+    if (parent !== "shared") throw new RuntimeError("INVALID_SCOPE", "child knowledge bases must inherit directly from shared");
     if (request.expectedRevision !== undefined && request.expectedRevision !== current.revision) {
       throw new RuntimeError("CONFLICT", `expected revision ${request.expectedRevision} but current revision is ${current.revision}`, { expectedRevision: request.expectedRevision, currentRevision: current.revision });
     }
@@ -190,6 +197,28 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
       return { state: nextState, value: kbDescriptor(root, knowledgeBase, false) };
     });
     return { revision: result.revision.revision, data: { knowledgeBase: result.value, committed: true } };
+  }
+  if (request.op === "export") {
+    if (request.kb !== undefined) findKb(current.state, request.kb);
+    if (request.outputDir !== undefined && request.outputDir !== root) {
+      throw new RuntimeError("INVALID_REQUEST", "export outputDir is not supported in the initial projection slice; export to the project root");
+    }
+    try {
+      const projection = await writeProjection(root, current.state, { kb: request.kb, repair: request.repair === true, generatedAt: current.committedAt });
+      return {
+        revision: current.revision,
+        data: {
+          directory: root,
+          files: projection.files,
+          manifestDigest: projection.manifestDigest,
+          historyIncluded: false,
+          profile: "okf-0.2+justification-1"
+        }
+      };
+    } catch (error) {
+      if (error instanceof ProjectionError) throw new RuntimeError("PROJECTION_DRIFT", error.message, undefined, { cause: error });
+      throw error;
+    }
   }
   throw new RuntimeError("INVALID_REQUEST", `unsupported runtime operation: ${request.op}`);
 }

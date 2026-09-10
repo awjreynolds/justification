@@ -36,9 +36,24 @@ parent lookup, safe `kb/<id>` directory creation, an append-only revision `1`,
 expected-revision checking, and listing of the new child plus inherited shared
 knowledge. The focused run passed all 15 tests (`15 passed, 0 failed`).
 
-The currently implemented runtime operations are `knowledge_bases` and
-`create_kb`. The remaining operation discriminants are intentionally typed and
+## Foundation corrections and export
+
+These cycles followed review of the first two slices.
+
+| Behavior | Red result | Green result |
+| --- | --- | --- |
+| A pre-existing `justification-history` symlink must not redirect writes outside the project | `knowledge_bases` unexpectedly succeeded and wrote revision 0 through the symlink; the focused test reported `Missing expected rejection` | `StorageError(HISTORY_CORRUPT)` after `lstat` rejects a history-directory symlink; revision files and lock entries receive the same guard |
+| `export` emits a readable OKF projection and preserves unrelated KB files | `RuntimeError(INVALID_REQUEST): unsupported runtime operation: export` | Current root index parses as OKF v0.2, delimiters are valid, KB `index.md` is plain Markdown, unrelated files survive, and the focused run passed `24` tests |
+| Integrity-valid history with dangling KB, source, observation, justification or relationship references is rejected | The five independent fixtures were accepted; the focused test reported `Missing expected rejection` | `StorageError(HISTORY_CORRUPT)` validates IDs, KB parents, node/source/observation links, justification groups and relationship endpoints before graph use; focused run passed `25` tests |
+| Nested KB parent and inherited-object-key scope errors | Nested child creation was accepted; `kb: "toString"` widened into an empty result | Nested parents now fail with `INVALID_SCOPE`; inherited object keys fail with `NOT_FOUND`; focused runs passed `26` and `27` tests |
+
+A stale `expectedRevision` regression was also run against `create_kb`; the
+existing guard passed immediately and durable revision remained unchanged
+(`28` tests passed). No new red result is claimed for that already implemented
+check.
+
+The currently implemented runtime operations are `knowledge_bases`,
+`create_kb`, and `export`. The remaining operation discriminants are typed and
 documented for transport integration but still fail as unsupported until their
 own red test is run. This keeps later work aligned with the one-behavior
 red/green sequence in `docs/planning/tdd-plan.md`.
-

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -6,6 +6,8 @@ import {
   emptyState,
   HISTORY_FORMAT,
   HISTORY_VERSION,
+  NODE_KINDS,
+  RELATIONSHIP_TYPES,
   sha256,
   STATE_FORMAT,
   STATE_VERSION
@@ -45,12 +47,55 @@ export function historyDirectory(root: string): string {
   return join(root, HISTORY_DIRECTORY);
 }
 
+async function assertSafeHistoryDirectory(root: string, create = false): Promise<string> {
+  const directory = historyDirectory(root);
+  let info;
+  try {
+    info = await lstat(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new StorageError("HISTORY_CORRUPT", "cannot inspect the project history directory", { cause: error });
+    }
+    if (!create) return directory;
+    try {
+      await mkdir(directory);
+    } catch (mkdirError) {
+      if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw new StorageError("HISTORY_CORRUPT", "cannot create the project history directory", { cause: mkdirError });
+      }
+    }
+    try {
+      info = await lstat(directory);
+    } catch (inspectError) {
+      throw new StorageError("HISTORY_CORRUPT", "cannot inspect the project history directory", { cause: inspectError });
+    }
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new StorageError("HISTORY_CORRUPT", "project history directory must be a real directory inside the project root");
+  }
+  return directory;
+}
+
+async function assertSafeEntry(path: string, label: string): Promise<void> {
+  try {
+    const info = await lstat(path);
+    if (info.isSymbolicLink()) throw new StorageError("HISTORY_CORRUPT", `${label} must not be a symlink`);
+  } catch (error) {
+    if (error instanceof StorageError) throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new StorageError("HISTORY_CORRUPT", `cannot inspect ${label}`, { cause: error });
+  }
+}
+
 function revisionFile(directory: string, revision: number): string {
   return join(directory, `${revision.toString().padStart(12, "0")}.json`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasOwn(record: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
 }
 
 async function readIdentity(root: string): Promise<ProjectIdentity> {
@@ -83,19 +128,70 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
   if (!isRecord(kbs.shared) || (kbs.shared as Record<string, unknown>).parent !== null) {
     throw new StorageError("HISTORY_CORRUPT", "history is missing the shared knowledge base");
   }
+  for (const [id, value] of Object.entries(kbs)) {
+    if (!isRecord(value) || value.id !== id || typeof value.title !== "string" || typeof value.createdBy !== "string" || typeof value.createdAt !== "string") {
+      throw new StorageError("HISTORY_CORRUPT", `history contains an invalid knowledge base: ${id}`);
+    }
+    const parent = value.parent;
+    if (id === "shared") {
+      if (parent !== null) throw new StorageError("HISTORY_CORRUPT", "shared knowledge base cannot have a parent");
+    } else if (parent !== "shared" || typeof parent !== "string" || !hasOwn(kbs, parent)) {
+      throw new StorageError("HISTORY_CORRUPT", `knowledge base ${id} has a missing parent`);
+    }
+  }
   const nodes = state.nodes as Record<string, Record<string, unknown>>;
-  for (const node of Object.values(nodes)) {
-    if (!isRecord(node) || typeof node.id !== "string" || typeof node.kb !== "string" || !isRecord(kbs[node.kb])) {
+  for (const [id, node] of Object.entries(nodes)) {
+    if (!isRecord(node) || node.id !== id || typeof node.kb !== "string" || !hasOwn(kbs, node.kb) || typeof node.kind !== "string" || !NODE_KINDS.includes(node.kind as (typeof NODE_KINDS)[number])) {
       throw new StorageError("HISTORY_CORRUPT", "history contains a node with an invalid knowledge base");
     }
   }
-  const references: Array<[string, unknown]> = [];
-  for (const [id, source] of Object.entries(state.sources as Record<string, unknown>)) references.push([`source ${id}`, source]);
-  for (const [id, observation] of Object.entries(state.observations as Record<string, unknown>)) references.push([`observation ${id}`, observation]);
-  for (const [id, justification] of Object.entries(state.justifications as Record<string, unknown>)) references.push([`justification ${id}`, justification]);
-  for (const [id, relationship] of Object.entries(state.relationships as Record<string, unknown>)) references.push([`relationship ${id}`, relationship]);
-  for (const [label, value] of references) {
-    if (!isRecord(value)) throw new StorageError("HISTORY_CORRUPT", `history contains an invalid ${label}`);
+  const sources = state.sources as Record<string, unknown>;
+  const observations = state.observations as Record<string, unknown>;
+  const justifications = state.justifications as Record<string, unknown>;
+  const relationships = state.relationships as Record<string, unknown>;
+  for (const [id, value] of Object.entries(sources)) {
+    if (!isRecord(value) || value.id !== id || typeof value.nodeId !== "string" || !hasOwn(nodes, value.nodeId) || (nodes[value.nodeId]?.kind !== "source") || typeof value.kb !== "string" || !hasOwn(kbs, value.kb) || value.providerId !== "file" || typeof value.locator !== "string") {
+      throw new StorageError("HISTORY_CORRUPT", `source ${id} has an invalid node or knowledge base reference`);
+    }
+    if (value.currentObservationId !== undefined && (typeof value.currentObservationId !== "string" || !hasOwn(observations, value.currentObservationId) || (observations[value.currentObservationId] as Record<string, unknown>).sourceId !== id)) {
+      throw new StorageError("HISTORY_CORRUPT", `source ${id} has an invalid current observation reference`);
+    }
+  }
+  for (const [id, value] of Object.entries(observations)) {
+    if (!isRecord(value) || value.id !== id || typeof value.sourceId !== "string" || !hasOwn(sources, value.sourceId) || typeof value.providerId !== "string" || typeof value.locator !== "string" || !["present", "missing", "unavailable", "denied"].includes(String(value.availability))) {
+      throw new StorageError("HISTORY_CORRUPT", `observation ${id} has an invalid source reference`);
+    }
+  }
+  for (const [id, value] of Object.entries(justifications)) {
+    if (!isRecord(value) || value.id !== id || typeof value.kb !== "string" || !hasOwn(kbs, value.kb) || typeof value.conclusion !== "string" || !hasOwn(nodes, value.conclusion) || !Array.isArray(value.groups) || value.groups.length === 0 || typeof value.rationale !== "string") {
+      throw new StorageError("HISTORY_CORRUPT", `justification ${id} has an invalid conclusion or knowledge base reference`);
+    }
+    for (const group of value.groups) {
+      if (!isRecord(group) || typeof group.id !== "string" || !Array.isArray(group.premises) || group.premises.length === 0) throw new StorageError("HISTORY_CORRUPT", `justification ${id} has an invalid premise group`);
+      for (const premise of group.premises) {
+        if (typeof premise !== "string" || !hasOwn(nodes, premise)) throw new StorageError("HISTORY_CORRUPT", `justification ${id} has a dangling premise reference`);
+      }
+    }
+  }
+  for (const [id, value] of Object.entries(relationships)) {
+    if (!isRecord(value) || value.id !== id || typeof value.kb !== "string" || !hasOwn(kbs, value.kb) || typeof value.from !== "string" || !hasOwn(nodes, value.from) || typeof value.to !== "string" || !hasOwn(nodes, value.to) || typeof value.type !== "string" || !RELATIONSHIP_TYPES.includes(value.type as (typeof RELATIONSHIP_TYPES)[number])) {
+      throw new StorageError("HISTORY_CORRUPT", `relationship ${id} has a dangling endpoint or invalid knowledge base reference`);
+    }
+  }
+  for (const change of state.changes as unknown[]) {
+    if (!isRecord(change) || typeof change.sourceId !== "string" || !hasOwn(sources, change.sourceId)) throw new StorageError("HISTORY_CORRUPT", "history contains a change with a dangling source reference");
+    for (const key of ["beforeObservationId", "afterObservationId"]) {
+      if (change[key] !== undefined && (typeof change[key] !== "string" || !hasOwn(observations, change[key]))) throw new StorageError("HISTORY_CORRUPT", "history contains a change with a dangling observation reference");
+    }
+  }
+  for (const contradiction of state.contradictions as unknown[]) {
+    if (!isRecord(contradiction) || typeof contradiction.left !== "string" || !hasOwn(nodes, contradiction.left) || typeof contradiction.right !== "string" || !hasOwn(nodes, contradiction.right)) throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with a dangling node reference");
+  }
+  for (const review of state.reviews as unknown[]) {
+    if (!isRecord(review) || typeof review.nodeId !== "string" || !hasOwn(nodes, review.nodeId) || typeof review.triggerId !== "string") throw new StorageError("HISTORY_CORRUPT", "history contains a review with a dangling node reference");
+  }
+  for (const change of state.scopeChanges as unknown[]) {
+    if (!isRecord(change) || typeof change.nodeId !== "string" || !hasOwn(nodes, change.nodeId) || typeof change.from !== "string" || !hasOwn(kbs, change.from) || typeof change.to !== "string" || !hasOwn(kbs, change.to)) throw new StorageError("HISTORY_CORRUPT", "history contains a scope change with a dangling reference");
   }
 }
 
@@ -134,6 +230,7 @@ async function listRevisionNumbers(directory: string): Promise<number[]> {
 
 async function readRevisionFile(directory: string, revision: number): Promise<unknown> {
   try {
+    await assertSafeEntry(revisionFile(directory, revision), `history revision ${revision}`);
     return JSON.parse(await readFile(revisionFile(directory, revision), "utf8")) as unknown;
   } catch (error) {
     throw new StorageError("HISTORY_CORRUPT", `cannot read history revision ${revision}`, { cause: error });
@@ -142,7 +239,7 @@ async function readRevisionFile(directory: string, revision: number): Promise<un
 
 export async function readHistory(root: string, atRevision?: number): Promise<LoadedHistory> {
   const identity = await readIdentity(root);
-  const directory = historyDirectory(root);
+  const directory = await assertSafeHistoryDirectory(root);
   const revisions = await listRevisionNumbers(directory);
   if (revisions.length === 0) {
     await ensureHistory(root, identity);
@@ -164,8 +261,7 @@ export async function readHistory(root: string, atRevision?: number): Promise<Lo
 
 export async function ensureHistory(root: string, identity?: ProjectIdentity): Promise<LoadedHistory> {
   const resolvedIdentity = identity ?? await readIdentity(root);
-  const directory = historyDirectory(root);
-  await mkdir(directory, { recursive: true });
+  const directory = await assertSafeHistoryDirectory(root, true);
   const revisions = await listRevisionNumbers(directory);
   if (revisions.length > 0) return readHistory(root);
   const state = emptyState(resolvedIdentity.id, resolvedIdentity.name);
@@ -202,10 +298,11 @@ export async function transact<T>(
   mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T }
 ): Promise<TransactionResult<T>> {
   const current = await ensureHistory(root);
-  const directory = historyDirectory(root);
+  const directory = await assertSafeHistoryDirectory(root);
   const lockPath = join(directory, LOCK_FILE);
   let lockHandle: Awaited<ReturnType<typeof open>> | undefined;
   try {
+    await assertSafeEntry(lockPath, "project history lock");
     lockHandle = await open(lockPath, "wx");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
@@ -231,6 +328,7 @@ export async function transact<T>(
     };
     const revision: HistoryRevision = { ...unsigned, integrity: sha256(canonicalJson(unsigned)) };
     const temporary = `${revisionFile(directory, nextRevision)}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+    await assertSafeEntry(revisionFile(directory, nextRevision), `history revision ${nextRevision}`);
     await writeFile(temporary, `${JSON.stringify(revision, null, 2)}\n`, "utf8");
     await rename(temporary, revisionFile(directory, nextRevision));
     return { revision, value: proposed.value, committed: true };
@@ -242,7 +340,7 @@ export async function transact<T>(
 
 export async function historyRevisions(root: string): Promise<HistoryRevision[]> {
   const identity = await readIdentity(root);
-  const directory = historyDirectory(root);
+  const directory = await assertSafeHistoryDirectory(root);
   const revisions = await listRevisionNumbers(directory);
   const result: HistoryRevision[] = [];
   let previous: HistoryRevision | null = null;
@@ -259,11 +357,5 @@ export async function validateHistory(root: string): Promise<HistoryRevision> {
 }
 
 export async function assertHistoryDirectory(root: string): Promise<void> {
-  const directory = historyDirectory(root);
-  try {
-    if (!(await stat(directory)).isDirectory()) throw new StorageError("HISTORY_CORRUPT", `${HISTORY_DIRECTORY} is not a directory`);
-  } catch (error) {
-    if (error instanceof StorageError) throw error;
-    throw new StorageError("HISTORY_CORRUPT", `${HISTORY_DIRECTORY} is unavailable`, { cause: error });
-  }
+  await assertSafeHistoryDirectory(root);
 }
