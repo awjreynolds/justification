@@ -192,4 +192,8 @@ earlier revisions. Generated projection files are runtime-owned. Edit native
 history through operations, and use the recovery procedure when a generated
 projection drifts.
 
-The [ADR proof](../examples/adr-demo.mjs) is the shortest end-to-end example.
+The [general knowledge-output proof](../examples/knowledge-output-demo.mjs)
+shows a research brief with direct claim basis, an open question, exact source
+impact and historical `why`. The [ADR proof](../examples/adr-demo.mjs) remains
+the decision-oriented example of the same runtime operations. Run either from
+the repository after building with `npm run demo` or `npm run demo:adr`.

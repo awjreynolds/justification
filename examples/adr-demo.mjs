@@ -302,6 +302,58 @@ async function run() {
   );
   assert.equal(currentAfterData.provenance[0].observedText, INITIAL_BENCHMARK);
 
+  const refreshData = dataOf(refreshResponse);
+  const change = refreshData.changes[0];
+  assert.ok(change && typeof change.id === "string", "refresh must return its change record");
+  const expectedReviewNodeIds = [evidenceId, claimId, decisionId, artifactId].sort();
+  assert.deepEqual(
+    refreshData.reviews.map((review) => review.nodeId).sort(),
+    expectedReviewNodeIds,
+    "refresh must review the old evidence and every declared dependent"
+  );
+  assert.equal(refreshData.reviews.every((review) => review.triggerId === change.id && review.status === "open"), true);
+
+  const impactResponse = await executeOperation(projectA, {
+    op: "impact",
+    nodeId: sourceNodeId,
+    kb: CHILD_KB,
+    evaluationTime: EVALUATION_TIME
+  });
+  const impactData = dataOf(impactResponse);
+  assert.equal(impactData.node.id, sourceNodeId);
+  const inspectedSource = await executeOperation(projectA, {
+    op: "inspect_source",
+    sourceId,
+    kb: CHILD_KB
+  });
+  const inspectedData = dataOf(inspectedSource);
+  const newEvidence = inspectedData.evidence.find((entry) => entry.observationId === refreshData.observations[0].id);
+  assert.ok(newEvidence, "refresh must retain evidence for the new observation");
+  const expectedImpactPaths = new Map([
+    [evidenceId, [[sourceNodeId, evidenceId]]],
+    [newEvidence.id, [[sourceNodeId, newEvidence.id]]],
+    [claimId, [[sourceNodeId, evidenceId, claimId]]],
+    [decisionId, [[sourceNodeId, evidenceId, claimId, decisionId]]],
+    [artifactId, [[sourceNodeId, evidenceId, claimId, decisionId, artifactId]]]
+  ]);
+  assert.deepEqual(
+    impactData.affected.map((entry) => entry.node.id).sort(),
+    [...expectedImpactPaths.keys()].sort(),
+    "impact must enumerate the exact source-to-artifact chain"
+  );
+  for (const entry of impactData.affected) {
+    assert.deepEqual(entry.paths, expectedImpactPaths.get(entry.node.id));
+    assert.ok(entry.reasons.length > 0, `impact reason is required for ${entry.node.id}`);
+  }
+  assert.deepEqual(impactData.changes.map((entry) => entry.id), [change.id]);
+  assert.deepEqual(impactData.reviews.map((review) => review.nodeId).sort(), expectedReviewNodeIds);
+  assert.equal(impactData.reviews.every((review) => review.triggerId === change.id && review.status === "open"), true);
+
+  const reviewResponse = await executeOperation(projectA, { op: "review", kb: CHILD_KB });
+  const reviewData = dataOf(reviewResponse);
+  assert.deepEqual(reviewData.reviews.map((review) => review.nodeId).sort(), expectedReviewNodeIds);
+  assert.equal(reviewData.reviews.every((review) => review.triggerType === "change" && review.triggerId === change.id && review.status === "open"), true);
+
   const unchangedRefresh = await executeOperation(projectA, {
     op: "refresh",
     kb: CHILD_KB,
@@ -351,7 +403,8 @@ async function run() {
     unchangedRefreshRevision: unchangedRefresh.revision,
     rebuiltRevision: rebuildResponse.revision,
     historicalWhyRevision: acceptanceRevision,
-    currentReview: "changed source is visible through evidence, claim, decision and artifact"
+    currentReview: expectedReviewNodeIds,
+    impactAffected: [...expectedImpactPaths.keys()].sort()
   }, null, 2));
 }
 

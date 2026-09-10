@@ -14,6 +14,18 @@ written. The same graph preserves sources, evidence, claims, assumptions,
 requirements, open questions and their relationships across sessions and
 outputs. Providers remain authoritative for the information they supply.
 
+```mermaid
+flowchart LR
+  S[Authoritative source] -->|capture| E[Retained evidence]
+  E -->|declared reasoning| K[Claims and knowledge]
+  K -->|recorded basis| D[Decision]
+  K -->|recorded basis| R[Research brief or report]
+  D -->|recorded basis| P[Plan or proposal]
+```
+
+`why` follows recorded reasoning back to its basis. `impact` follows declared
+dependencies forward to knowledge and outputs that may need reassessment.
+
 The MVP stores semantic history in an append-only, integrity-checked native
 project and generates a readable OKF projection. A source change can therefore
 show which evidence, claims, decisions and artifacts need review without
@@ -32,21 +44,34 @@ The build emits `dist/index.js` and `dist/cli.js`. Run the CLI directly with
 `node dist/cli.js`, or install this checkout into another project with
 `npm install /path/to/justification` to use its package export and binary.
 
-The first end-to-end validation uses the fictional ADR scenario from the
-original brief. It exercises the general knowledge workflow; the runtime has
-no ADR-specific operations. Run that example with:
+The first end-to-end validation uses a fictional research brief and exercises
+the general knowledge workflow without requiring a decision record. Run it
+with:
 
 ```sh
-node examples/adr-demo.mjs
+npm run demo
+node examples/knowledge-output-demo.mjs --root /path/to/an/empty/directory
+```
+
+The script captures a fictional survey and independent notes, records claims
+with explicit support, writes a research brief with a direct claim basis,
+retains an open question, changes only the survey, and checks exact affected
+and unaffected sets plus historical `why`. It leaves the generated directory
+in place and prints its paths and stable IDs. The fixture narrative is in
+[examples/knowledge-output-fixture.md](examples/knowledge-output-fixture.md).
+
+The original ADR scenario remains available as a second general-product
+example:
+
+```sh
+npm run demo:adr
 node examples/adr-demo.mjs --root /path/to/an/empty/directory
 ```
 
-The script creates two isolated projects, captures a fictional benchmark,
-records three options plus a shared constraint, follows evidence through a
-claim and decision to an ADR artifact, changes the source, checks review impact,
-checks unchanged refresh idempotence, and removes/rebuilds the disposable index.
-It leaves the generated directory in place and prints its paths and stable IDs.
-The fixture narrative is in [examples/adr-fixture.md](examples/adr-fixture.md).
+It captures a fictional benchmark, records options and a constraint, follows
+evidence through a claim and decision to an ADR artifact, changes the source,
+checks review impact and unchanged refresh idempotence, and rebuilds the
+disposable index.
 
 Use the runtime, CLI and MCP server
 
