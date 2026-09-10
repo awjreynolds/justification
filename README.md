@@ -69,11 +69,12 @@ files are provider-owned and must be backed up separately when they matter to
 future refreshes. The disposable `.justification/` index can be removed and
 rebuilt from native history.
 
-An `export` operation writes the current readable OKF v0.2 projection under a
-chosen output directory. It is a useful portable reading view, but it does not
-contain the complete native revision history or enough information to reproduce
-historical `why` queries on its own. Generic OKF import, lossless editing and
-legacy migration are outside this MVP. See
+An `export` operation writes the current readable OKF v0.2 projection under the
+project root. A different output directory is not supported in this MVP. It is
+a useful portable reading view, but it does not contain the complete native
+revision history or enough information to reproduce historical `why` queries
+on its own. Generic OKF import, lossless editing and legacy migration are
+outside this MVP. See
 [docs/recovery.md](docs/recovery.md) for corruption, lock and projection-drift
 recovery.
 

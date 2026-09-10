@@ -194,7 +194,11 @@ const requestSchemas = {
   }),
   audit: withProject({ kb: z.string().min(1).optional(), evaluationTime: z.string().optional() }),
   rebuild: withProject({ actor: actorSchema.optional(), at: atSchema, expectedRevision: expectedRevisionSchema }),
-  export: withProject({ kb: z.string().min(1).optional(), outputDir: z.string().min(1).optional() })
+  export: withProject({
+    kb: z.string().min(1).optional(),
+    outputDir: z.string().min(1).optional(),
+    repair: z.boolean().optional()
+  })
 } as const;
 
 type OperationName = keyof typeof requestSchemas;

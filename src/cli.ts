@@ -117,11 +117,11 @@ async function readRequestText(path: string): Promise<string> {
     return readFile(path, "utf8");
   }
 
-  const chunks: string[] = [];
+  const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
-    chunks.push(typeof chunk === "string" ? chunk : chunk.toString("utf8"));
+    chunks.push(typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk);
   }
-  return chunks.join("");
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

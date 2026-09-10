@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
-import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile as execFileCallback, spawn } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -18,11 +18,12 @@ test("the MCP stdio server lists every explicitly configured project", async () 
   const firstRoot = join(parent, "first");
   const secondRoot = join(parent, "second");
   const cli = join(process.cwd(), "dist", "cli.js");
+  let client: Client | undefined;
 
   try {
     const first = await initializeProject(firstRoot);
     const second = await initializeProject(secondRoot);
-    const client = new Client(
+    client = new Client(
       { name: "mcp-test-client", version: "0.0.1" },
       { versionNegotiation: { mode: "auto" } }
     );
@@ -66,7 +67,8 @@ test("the MCP stdio server lists every explicitly configured project", async () 
         project_id: first.id,
         id: "review",
         title: "Review KB",
-        actor: "mcp-test"
+        actor: "mcp-test",
+        at: "2026-01-01T00:00:00.000Z"
       }
     });
     assert.equal(created.isError, undefined);
@@ -90,24 +92,64 @@ test("the MCP stdio server lists every explicitly configured project", async () 
       title: "Review KB",
       parent: "shared",
       createdBy: "mcp-test",
-      createdAt: createdPayload.data.knowledgeBase.createdAt,
+      createdAt: "2026-01-01T00:00:00.000Z",
       inherited: false,
       root: join(first.root, "kb", "review")
     });
-
-    await client.close();
   } finally {
+    await client?.close().catch(() => undefined);
     await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("MCP export repairs an intentionally modified generated projection", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-mcp-export-repair-"));
+  const cli = join(process.cwd(), "dist", "cli.js");
+  let client: Client | undefined;
+
+  try {
+    const project = await initializeProject(root);
+    client = new Client(
+      { name: "mcp-test-client", version: "0.0.1" },
+      { versionNegotiation: { mode: "auto" } }
+    );
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [cli, "mcp", root],
+      stderr: "pipe"
+    });
+
+    await client.connect(transport);
+    const initial = await client.callTool({
+      name: "export",
+      arguments: { project_id: project.id }
+    });
+    assert.equal(initial.isError, undefined);
+    const generatedPath = join(root, "kb", "index.md");
+    const generated = await readFile(generatedPath, "utf8");
+    await writeFile(generatedPath, `${generated}\n<!-- intentionally modified -->\n`, "utf8");
+
+    const repaired = await client.callTool({
+      name: "export",
+      arguments: { project_id: project.id, repair: true }
+    });
+    assert.equal(repaired.isError, undefined);
+    assert.deepEqual(repaired.structuredContent, initial.structuredContent);
+    assert.equal(await readFile(generatedPath, "utf8"), generated);
+  } finally {
+    await client?.close().catch(() => undefined);
+    await rm(root, { recursive: true, force: true });
   }
 });
 
 test("MCP returns a structured scope error before dispatching an unknown project", async () => {
   const root = await mkdtemp(join(tmpdir(), "justification-mcp-scope-"));
   const cli = join(process.cwd(), "dist", "cli.js");
+  let client: Client | undefined;
 
   try {
     await initializeProject(root);
-    const client = new Client(
+    client = new Client(
       { name: "mcp-test-client", version: "0.0.1" },
       { versionNegotiation: { mode: "auto" } }
     );
@@ -131,8 +173,8 @@ test("MCP returns a structured scope error before dispatching an unknown project
         retryable: false
       }
     });
-    await client.close();
   } finally {
+    await client?.close().catch(() => undefined);
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -182,6 +224,47 @@ test("the CLI run command dispatches a valid operation and emits its JSON respon
     assert.equal(response.data.project.id, project.id);
     assert.deepEqual(response.data.knowledgeBases.map((kb) => kb.id), ["shared"]);
     assert.equal(result.stderr, "");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("the CLI run command decodes UTF-8 split across stdin chunks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "justification-cli-run-utf8-"));
+  const cli = join(process.cwd(), "dist", "cli.js");
+
+  try {
+    await initializeProject(root);
+    const request = Buffer.from(JSON.stringify({ op: "knowledge_bases", kb: "Café" }), "utf8");
+    const accent = Buffer.from("é", "utf8");
+    const accentOffset = request.indexOf(accent);
+    assert.ok(accentOffset >= 0);
+    const splitOffset = accentOffset + 1;
+    const child = spawn(process.execPath, [cli, "run", root, "-"], {
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    });
+
+    child.stdin.write(request.subarray(0, splitOffset));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    child.stdin.end(request.subarray(splitOffset));
+    const result = await closed;
+    assert.equal(result.code, 1);
+    assert.equal(result.signal, null);
+    assert.equal(Buffer.concat(stdout).toString("utf8"), "");
+    assert.deepEqual(JSON.parse(Buffer.concat(stderr).toString("utf8")), {
+      error: {
+        code: "NOT_FOUND",
+        message: "knowledge base not found: Café"
+      }
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
