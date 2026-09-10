@@ -1,9 +1,18 @@
 # Justification
 
-Justification is a local-first, vendor-neutral context and justification graph
-for agentic work. It records attributed claims, retained source observations,
-declared support and downstream review impact while leaving the provider
-authoritative for its own files.
+The MVP is in development. [Acceptance evidence](docs/implementation/acceptance.md)
+tracks what has been verified and what remains to be completed.
+
+Justification is a local-first, vendor-neutral knowledge and justification
+system for agentic work. It helps people and agents accumulate knowledge,
+trace decisions to their evidence and reasoning, and create knowledge outputs
+that remain connected to their basis.
+
+Knowledge outputs include research briefs, reports, plans, proposals, PRDs and
+ADRs. Knowledge can be useful before a decision is made or an output is
+written. The same graph preserves sources, evidence, claims, assumptions,
+requirements, open questions and their relationships across sessions and
+outputs. Providers remain authoritative for the information they supply.
 
 The MVP stores semantic history in an append-only, integrity-checked native
 project and generates a readable OKF projection. A source change can therefore
@@ -23,7 +32,9 @@ The build emits `dist/index.js` and `dist/cli.js`. Run the CLI directly with
 `node dist/cli.js`, or install this checkout into another project with
 `npm install /path/to/justification` to use its package export and binary.
 
-Run the fictional ADR proof with:
+The first end-to-end validation uses the fictional ADR scenario from the
+original brief. It exercises the general knowledge workflow; the runtime has
+no ADR-specific operations. Run that example with:
 
 ```sh
 node examples/adr-demo.mjs

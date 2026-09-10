@@ -8,13 +8,13 @@ before reporting the MVP delivered.
 | Requirement | Public verification | Status |
 | --- | --- | --- |
 | 1–4: initialization, discovery, shared and child KBs | Runtime and CLI tests with real temporary directories; one MCP server lists two configured projects and creates a child | Verified |
-| 5: OKF-compatible Markdown | Independently parsed frontmatter, pinned OKF v0.2 root index rules, readable nodes, ownership/drift checks | Foundation verified; complete reasoning projection pending |
-| 6–10: sources, claims, decisions, artifacts and provenance | File capture → retained evidence → claim → decision with acceptance basis → ADR; independent source digest and readable provenance | Pending |
-| 11: shared inheritance | Child visibility and rejected sibling/shared-to-child references; explicit promotion | Initial scope checks verified; graph scenario pending |
+| 5: OKF-compatible Markdown | Independently parsed frontmatter, pinned OKF v0.2 root index rules, navigable source links, structured support groups and provenance, scoped ownership/drift checks | Current reasoning projection verified; recovery and later conflict/review projection checks pending |
+| 6–10: sources, claims, decisions, artifacts and provenance | File capture → retained evidence → claim → decision with acceptance basis → ADR; independent source digest and readable provenance | Recorded chain verified by runtime and restarted legacy MCP client; maintenance scenario pending |
+| 11: shared inheritance | Child visibility and rejected sibling/shared-to-child references; explicit promotion | Node, support and relationship scope checks verified; promotion and KB case-collision correction pending |
 | 12–13: why and impact | Exact upstream chain, original acceptance revision, exact affected downstream IDs after a source change | Pending |
 | 14–15: contradictions and review issues | Attributed conflict, explicit directional resolution, preserved history, deduplicated and subsequent review work | Pending |
-| 16: one external provider | Real project-relative UTF-8 files; content/availability transitions; path containment and bounded reads | Pending |
-| 17: MCP | Actual SDK stdio clients and installed Codex; two configured projects, structured errors, restart and full ADR workflow | Initial adapters and separate compatibility fixture verified; production lifecycle pending |
+| 16: one external provider | Real project-relative UTF-8 files; content/availability transitions; path containment and bounded reads | Provider containment, bounded reads and exact-byte capture reviewed; refresh/availability lifecycle pending |
+| 17: MCP | Actual SDK stdio clients and installed Codex; two configured projects, structured errors, restart and full ADR workflow | Production SDK ADR capture/why/restart and installed Codex project/KB calls verified; maintenance and foreign-node isolation lifecycle pending |
 | 18: deterministic rebuild | Delete disposable state, rebuild from native history, compare queries at a fixed revision/time and restore a native backup | Pending |
 
 Additional contract checks cover alternative AND/OR support, explicit

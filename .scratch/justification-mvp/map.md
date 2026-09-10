@@ -47,6 +47,18 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
 - Run independent Astra-medium code reviews, fix material findings through Luna and re-review.
 - Ship the runnable ADR example, operation/backup documentation and optional agent skill; verify packaged installation and push reviewed work.
 
+Current sequence after the reviewed ADR foundation: source-change propagation,
+strict shared request validation, and deterministic recovery; then explicit
+review/conflict resolution, promotion, bounded queries and artifact audit.
+Source maintenance and recovery each begin with a public failing behavior.
+The shared-schema extraction's first rejection test preceded its runtime hook;
+later validation clauses were prepared before their tests and must be recorded
+as verification rather than historical test-first evidence.
+
+A public check on the development Mac accepted `create_kb` with ID `Shared`
+at revision 1, where `kb/Shared` and `kb/shared` had the same inode. Correct
+case-insensitive path collisions before completing scope acceptance.
+
 ## Delivery decisions recorded by the examples/documentation slice
 
 - The worked fixture uses a fictional checkout-cache benchmark with one shared
@@ -89,6 +101,20 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
   existing graph already reaches the conclusion from that premise. A public
   `A <- B <- A` regression records both the rejected error and unchanged
   durable revision.
+
+## Delivery decisions recorded by the recovery slice
+
+- The first rebuild response is a read-only `{ revision, data }` result. Its
+  data reports `rebuilt: true`, `committed: false`, the unchanged semantic
+  revision, deterministic disposable index metadata and generated projection
+  ownership metadata. The exact shape and first red-green evidence are in
+  [recovery-tdd.md](../../docs/implementation/recovery-tdd.md).
+- The first recovery fixture uses a real file observation, claim support and
+  decision basis, then compares fixed-time `why` output and generated files
+  after deleting the complete `.justification/` tree. It also rebuilds a copy
+  containing only native descriptor/history, source and unrelated KB content.
+  It intentionally leaves individual missing projections, manual edits,
+  projection-failure repair and malformed-history recovery to later tests.
 
 ## Delivery decisions recorded by the correction slice
 

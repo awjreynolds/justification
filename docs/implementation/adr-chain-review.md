@@ -75,6 +75,16 @@ from the wrong child, so the owning-KB guard is exercised independently of the
 locator guard. This is a test-quality correction; no new hard process
 violation was found.
 
+Final independent Spec and Standards re-reviews of
+`0dc2ddd...8432583` found no remaining material/actionable findings. The
+correction rejects mismatched justification ownership, filters scoped records
+defensively, keeps incoming child relationships in their owning documents,
+and preserves untouched manifest entries during scoped export. Public
+regressions cover the reproduced failures; the same-locator wrong-KB case is
+honestly recorded as immediately-green coverage. Luna reported all 50 tests,
+typecheck and whitespace checks passing before the bounded commit. The next
+slice is source-change maintenance.
+
 ## Scope re-review corrections
 
 The two narrower P1 scope leaks now have public red-green regressions. A

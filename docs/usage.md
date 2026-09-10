@@ -93,7 +93,7 @@ references. `why`, `impact`, `trace`, `context`, `search`, `conflicts`,
 `changed` and `audit` are read operations. `why` accepts a committed
 `revision` and an explicit `evaluationTime` for reproducible historical output.
 
-The core workflow is:
+The general knowledge workflow is:
 
 1. Create a child KB with `create_kb`.
 2. Capture a file with `capture_source`; inspect its stable source identity and
@@ -102,7 +102,8 @@ The core workflow is:
    assumptions must set `fields.accepted: true` before they can ground support.
    Attach claim or other current support with `justify`, putting jointly
    required premises in one group and alternatives in separate groups.
-4. Record a decision or artifact with an explicit `basis` or `basisGroups`.
+4. When a choice is made, record a decision with its basis. When creating a
+   knowledge output, record an artifact with an explicit `basis` or `basisGroups`.
    Decisions use
    `fields.consideredOptions`, `fields.selectedOption` and
    `fields.rationale`; artifacts use `fields.locator` and `fields.digest`.
@@ -116,7 +117,22 @@ The runtime checks that their premises are available and applicable; it does not
 infer truth from arbitrary prose or call a language model. A changed or missing
 source makes dependent support pending and can open review; it does not mark a
 claim false. Multiple groups are alternatives, so a surviving alternative can
-remain usable while the original basis is reviewed.
+  remain usable while the original basis is reviewed.
+
+## Create knowledge outputs
+
+An agent can use the accumulated knowledge to write a research brief, report,
+plan, proposal or other output with the appropriate authoring tools. Record
+that output as an `artifact`, referencing the claims, requirements or decisions
+that support it. A research synthesis may cite claims directly; it does not
+need an artificial decision record. The output's file locator and captured
+digest identify the version whose basis was recorded.
+
+The readable `kb/` projection is also compiled knowledge in its own right.
+It preserves attributed knowledge and reasoning for reuse across sessions and
+outputs. The runtime manages these relationships and their maintenance; the
+person or agent supplies interpretation and writes the output. The first
+example uses an ADR to exercise these general operations.
 
 ## CLI JSON transport
 

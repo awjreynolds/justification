@@ -23,6 +23,17 @@ Record a claim's applicability and the rationale connecting its premises to the 
 
 For a decision, record the options considered, selected option, constraints, rationale and explicit basis. For an artifact, record its file reference and basis. Retain the acceptance revision when citing why a historical choice was made. Later support is additional context, not the reason the original author necessarily used.
 
+## Create knowledge outputs
+
+Use accumulated knowledge to write the requested research brief, report, plan,
+proposal or other output with appropriate authoring tools. Preserve the
+distinction between observations, interpretation, choices and open questions
+in the output. Record the completed output as an artifact with its actual
+supporting claims, requirements or decisions as the basis and its file locator
+when available. A synthesis can be supported directly by claims; create a
+decision record only when a choice was made. Reuse shared knowledge across
+outputs while preserving each output's scope and recorded basis.
+
 ## Refresh and review
 
 Refresh the relevant source or KB before rereading a whole corpus. Inspect the resulting ChangeSet and affected subgraph, then reassess only the implicated reasoning. A changed, missing or unavailable source means its support needs attention; it does not establish that a claim is false.

@@ -2,6 +2,11 @@
 
 Justification owns the reasoning, provenance and relationships between knowledge derived from authoritative source systems. Its language distinguishes project knowledge from the systems that provide it.
 
+The product supports accumulating and reusing knowledge, tracing decisions,
+and creating knowledge outputs whose basis remains inspectable as sources
+change. The ADR scenario is the first validation fixture. Research, reports,
+plans, proposals and other outputs use the same domain and operations.
+
 ## Language
 
 **Project**:
@@ -18,7 +23,10 @@ A source system that remains authoritative for observations in its own domain, s
 _Avoid_: Treating Justification as the authority for the provider's underlying observations.
 
 **Artifact**:
-An output whose consequential assertions should have traceable justification, such as an ADR, report, plan or proposal.
+A knowledge output whose consequential assertions should have traceable justification, such as a research brief, report, plan, proposal, PRD or ADR. `artifact` is the runtime node kind for an output; its basis may be claims, requirements, decisions or other supported knowledge.
+
+**Decision**:
+An attributed choice with its rationale and recorded basis, independent of the document or other output that communicates it. A research finding can become a knowledge output without requiring a decision record.
 
 **Contradiction**:
 A recorded conflict between pieces of knowledge that remains visible until an explicit resolution accounts for it.

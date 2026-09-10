@@ -2,6 +2,13 @@
 
 Decision date: 2026-09-10. The user subsequently instructed “Continue until complete. Going afk”. This authorizes completion of the original MVP and routine design decisions without waiting at the earlier planning gates. Decisions below are the agent's implementation choices under that instruction; they are not answers attributed to the user. The confirmed TDD seams and Luna max / Astra medium model choices continue to apply.
 
+The user later clarified that the product concerns knowledge, tracing decisions
+and creating knowledge outputs. This is the general product scope throughout
+this contract. An ADR is the first acceptance example from the original brief,
+not a specialized runtime entity or required output format. Research briefs,
+reports, plans, proposals and other outputs use the same knowledge graph;
+knowledge capture and reuse do not require creating a decision or document.
+
 ## Acceptance scenario
 
 Initialize two projects. In one, create a child ADR KB, capture file-provider observations about three options, record a shared constraint and locally attributed claims, justify a decision, and reference an ADR. Explain the ADR through the decision and claims to retained evidence and its authoritative file locator. Modify one source and refresh: report the exact affected evidence, claim, decision and artifact, preserving the original explanation at its revision. Repeated unchanged refresh creates no duplicate work. A surviving alternative justification remains usable even while the original basis requires review. The other project is unaffected. Restart and delete/rebuild the index: queries at a fixed revision are equivalent. Exercise these operations through one MCP server serving both configured project roots.
