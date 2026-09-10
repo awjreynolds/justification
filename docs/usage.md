@@ -49,13 +49,38 @@ await executeOperation(project.root, {
   actor: "alex"
 });
 
+const requirementNode = await executeOperation(project.root, {
+  op: "record",
+  kb: "shared",
+  kind: "requirement",
+  title: "Checkout p95 latency constraint",
+  body: "Checkout reads stay below 150 ms at p95.",
+  fields: { accepted: true },
+  actor: "alex"
+});
+
+const capture = await executeOperation(project.root, {
+  op: "capture_source",
+  kb: "checkout-cache",
+  locator: "evidence/cache-benchmark.md",
+  actor: "alex"
+});
+
 const claim = await executeOperation(project.root, {
   op: "record",
   kb: "checkout-cache",
   kind: "claim",
   title: "Redis meets the latency requirement",
   body: "The retained benchmark supports this claim.",
-  basis: ["evidence-id", "requirement-id"],
+  actor: "alex"
+});
+
+await executeOperation(project.root, {
+  op: "justify",
+  conclusion: claim.data.node.id,
+  groups: [[requirementNode.data.node.id, capture.data.evidence.id]],
+  rationale: "The accepted requirement and retained observation jointly support the claim.",
+  kb: "checkout-cache",
   actor: "alex"
 });
 console.log(claim.revision, claim.data);
@@ -73,9 +98,12 @@ The core workflow is:
 1. Create a child KB with `create_kb`.
 2. Capture a file with `capture_source`; inspect its stable source identity and
    retained observation with `inspect_source` and `evidence`.
-3. Record claims, requirements and options with `record`. Use `basis` for one
-   jointly required group or `basisGroups` for alternative groups.
-4. Record a decision or artifact with an explicit basis. Decisions use
+3. Record claims, requirements and options with `record`; requirements and
+   assumptions must set `fields.accepted: true` before they can ground support.
+   Attach claim or other current support with `justify`, putting jointly
+   required premises in one group and alternatives in separate groups.
+4. Record a decision or artifact with an explicit `basis` or `basisGroups`.
+   Decisions use
    `fields.consideredOptions`, `fields.selectedOption` and
    `fields.rationale`; artifacts use `fields.locator` and `fields.digest`.
 5. Explain a node with `why`, inspect downstream dependencies with `impact` or

@@ -9,6 +9,11 @@ The project is **Acme Checkout**, and the child knowledge base is
 
 > Checkout reads must stay below 150 ms at p95, including a cache miss.
 
+The requirement is explicitly accepted in the fixture before it is used as a
+support premise. The claim is recorded first, then a `justify` operation adds
+one jointly required group containing the accepted requirement and retained
+benchmark evidence.
+
 The team considers three options:
 
 1. **Redis** — a managed Redis-compatible cache with replication.

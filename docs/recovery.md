@@ -64,8 +64,9 @@ using it. These typed errors identify the recovery path:
   repair missing historical revisions.
 - `StorageError` with `CONCURRENT_WRITE` means the project lock is present. A
   lock is a safety boundary, not a failed transaction: confirm that no
-  Justification process is still writing before removing the lock file, then
-  retry. If a writer is active, wait for it to finish.
+  Justification process is still writing before removing
+  `justification-history/.lock`, then retry. Preserve all numbered revision
+  files. If a writer is active, wait for it to finish.
 - `StorageError` with `PROJECTION_FAILED` means history is intact but the
   current projection could not be written. Preserve the committed revision and
   use `rebuild` after correcting the reported filesystem issue.

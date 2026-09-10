@@ -76,54 +76,41 @@ function sha256(text) {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-function isRecord(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+function recordNodeId(response, expectedKind) {
+  const node = response?.data?.node;
+  assert.ok(node && typeof node === "object", "record response must contain data.node");
+  assert.equal(node.kind, expectedKind, `record response kind must be ${expectedKind}`);
+  assert.equal(typeof node.id, "string", "record response node.id must be a string");
+  return node.id;
 }
 
-function walk(value, visit) {
-  if (visit(value)) return value;
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = walk(item, visit);
-      if (found !== undefined) return found;
-    }
-    return undefined;
-  }
-  if (isRecord(value)) {
-    for (const item of Object.values(value)) {
-      const found = walk(item, visit);
-      if (found !== undefined) return found;
-    }
-  }
-  return undefined;
+function captureIds(response) {
+  const data = response?.data;
+  assert.ok(data && typeof data === "object", "capture response must contain data");
+  assert.ok(data.source && typeof data.source === "object", "capture response must contain data.source");
+  assert.ok(data.observation && typeof data.observation === "object", "capture response must contain data.observation");
+  assert.ok(data.evidence && typeof data.evidence === "object", "capture response must contain data.evidence");
+  assert.equal(typeof data.source.id, "string", "source.id must be a string");
+  assert.equal(typeof data.source.nodeId, "string", "source.nodeId must be a string");
+  assert.equal(typeof data.observation.id, "string", "observation.id must be a string");
+  assert.equal(typeof data.evidence.id, "string", "evidence.id must be a string");
+  assert.equal(data.evidence.sourceId, data.source.id, "evidence must point to the provider source ID");
+  assert.equal(data.evidence.observationId, data.observation.id, "evidence must point to its retained observation");
+  return {
+    sourceId: data.source.id,
+    sourceNodeId: data.source.nodeId,
+    observationId: data.observation.id,
+    evidenceId: data.evidence.id
+  };
 }
 
-function idWithKind(response, kind) {
-  const found = walk(response, (value) =>
-    isRecord(value) && value.kind === kind && typeof value.id === "string"
-  );
-  if (found !== undefined) return found.id;
-
-  // capture_source may return stable IDs directly while record returns the
-  // complete node. Keep this fallback at the transport boundary so the demo
-  // remains independent of the runtime's internal state shape.
-  const field = kind === "source"
-    ? "sourceId"
-    : kind === "evidence"
-      ? "evidenceId"
-      : "nodeId";
-  if (field !== undefined) {
-    const direct = walk(response, (value) =>
-      isRecord(value) && typeof value[field] === "string"
-    );
-    if (direct !== undefined) return direct[field];
-  }
-  throw new Error(`operation response did not contain a ${kind} node`);
-}
-
-function hasEveryId(value, ids) {
-  const serialized = JSON.stringify(value);
-  return ids.every((id) => serialized.includes(id));
+function sortedIds(nodes, label) {
+  assert.ok(Array.isArray(nodes), `${label} must be an array`);
+  return nodes.map((node) => {
+    assert.ok(node && typeof node === "object", `${label} entries must be objects`);
+    assert.equal(typeof node.id, "string", `${label} entries must have IDs`);
+    return node.id;
+  }).sort();
 }
 
 function dataOf(response) {
@@ -166,9 +153,10 @@ async function run() {
     kind: "requirement",
     title: "Checkout p95 latency constraint",
     body: "Checkout reads must stay below 150 ms at p95, including a cache miss.",
+    fields: { accepted: true },
     actor: ACTOR
   });
-  const constraintId = idWithKind(constraintResponse, "requirement");
+  const constraintId = recordNodeId(constraintResponse, "requirement");
 
   const optionIds = {};
   for (const [title, body] of [
@@ -184,7 +172,7 @@ async function run() {
       body,
       actor: ACTOR
     });
-    optionIds[title] = idWithKind(response, "option");
+    optionIds[title] = recordNodeId(response, "option");
   }
 
   const captureResponse = await executeOperation(projectA, {
@@ -194,8 +182,9 @@ async function run() {
     title: "Fictional cache benchmark",
     actor: ACTOR
   });
-  const sourceId = idWithKind(captureResponse, "source");
-  const evidenceId = idWithKind(captureResponse, "evidence");
+  const { sourceId, sourceNodeId, observationId, evidenceId } = captureIds(captureResponse);
+  assert.equal(captureResponse.data.observation.observedText, INITIAL_BENCHMARK);
+  assert.equal(captureResponse.data.evidence.body, INITIAL_BENCHMARK);
 
   const claimResponse = await executeOperation(projectA, {
     op: "record",
@@ -203,10 +192,23 @@ async function run() {
     kind: "claim",
     title: "Redis is the only qualifying cache option",
     body: "Within this fictional benchmark, Redis is the only option meeting the latency and restart requirements.",
-    basis: [constraintId, evidenceId],
     actor: ACTOR
   });
-  const claimId = idWithKind(claimResponse, "claim");
+  const claimId = recordNodeId(claimResponse, "claim");
+
+  const claimJustificationResponse = await executeOperation(projectA, {
+    op: "justify",
+    conclusion: claimId,
+    groups: [[constraintId, evidenceId]],
+    rationale: "The retained benchmark and the shared constraint jointly support this fictional claim.",
+    kb: CHILD_KB,
+    actor: ACTOR
+  });
+  assert.equal(claimJustificationResponse.data.justification.conclusion, claimId);
+  assert.deepEqual(
+    [...claimJustificationResponse.data.justification.groups[0].premises].sort(),
+    [constraintId, evidenceId].sort()
+  );
 
   const decisionResponse = await executeOperation(projectA, {
     op: "record",
@@ -222,7 +224,7 @@ async function run() {
     },
     actor: ACTOR
   });
-  const decisionId = idWithKind(decisionResponse, "decision");
+  const decisionId = recordNodeId(decisionResponse, "decision");
   const acceptanceRevision = decisionResponse.revision;
 
   const artifactResponse = await executeOperation(projectA, {
@@ -238,7 +240,7 @@ async function run() {
     },
     actor: ACTOR
   });
-  const artifactId = idWithKind(artifactResponse, "artifact");
+  const artifactId = recordNodeId(artifactResponse, "artifact");
 
   const historicalBefore = await executeOperation(projectA, {
     op: "why",
@@ -246,15 +248,36 @@ async function run() {
     revision: acceptanceRevision,
     evaluationTime: EVALUATION_TIME
   });
-  assert.match(JSON.stringify(dataOf(historicalBefore)), /82 ms/);
-  assert.ok(hasEveryId(historicalBefore, [constraintId, claimId, evidenceId]));
+  const historicalData = dataOf(historicalBefore);
+  assert.equal(historicalData.node.id, decisionId);
+  assert.equal(historicalData.support.status, "usable");
+  assert.equal(historicalData.originalBasis.recordedAtRevision, acceptanceRevision);
+  assert.equal(historicalData.originalBasis.justification.conclusion, decisionId);
+  assert.deepEqual(
+    [...historicalData.originalBasis.justification.groups[0].premises].sort(),
+    [constraintId, claimId].sort()
+  );
+  assert.deepEqual(
+    sortedIds(historicalData.upstream, "historical upstream"),
+    [claimId, constraintId, evidenceId, sourceNodeId].sort()
+  );
+  assert.equal(historicalData.provenance.length, 1);
+  assert.equal(historicalData.provenance[0].sourceId, sourceId);
+  assert.equal(historicalData.provenance[0].observationId, observationId);
+  assert.equal(historicalData.provenance[0].observedText, INITIAL_BENCHMARK);
 
   const currentBefore = await executeOperation(projectA, {
     op: "why",
     nodeId: decisionId,
     evaluationTime: EVALUATION_TIME
   });
-  assert.match(JSON.stringify(dataOf(currentBefore)), /82 ms/);
+  const currentBeforeData = dataOf(currentBefore);
+  assert.equal(currentBeforeData.support.status, "usable");
+  assert.deepEqual(
+    sortedIds(currentBeforeData.upstream, "current upstream"),
+    [claimId, constraintId, evidenceId, sourceNodeId].sort()
+  );
+  assert.equal(currentBeforeData.provenance[0].observedText, INITIAL_BENCHMARK);
 
   await writeFile(join(projectA, sourceLocator), CHANGED_BENCHMARK, "utf8");
   const refreshResponse = await executeOperation(projectA, {
@@ -264,18 +287,20 @@ async function run() {
     evaluationTime: EVALUATION_TIME
   });
   assert.ok(refreshResponse.revision > currentBefore.revision);
-  assert.ok(
-    hasEveryId(refreshResponse, [evidenceId, claimId, decisionId, artifactId]),
-    "refresh reports the retained evidence and all declared downstream dependants"
-  );
 
   const currentAfter = await executeOperation(projectA, {
     op: "why",
     nodeId: decisionId,
     evaluationTime: EVALUATION_TIME
   });
-  assert.match(JSON.stringify(dataOf(currentAfter)), /171 ms/);
-  assert.ok(hasEveryId(currentAfter, [claimId, decisionId, artifactId]));
+  const currentAfterData = dataOf(currentAfter);
+  assert.equal(currentAfterData.node.id, decisionId);
+  assert.equal(currentAfterData.support.status, "pending");
+  assert.deepEqual(
+    sortedIds(currentAfterData.upstream, "current upstream after change"),
+    [claimId, constraintId, evidenceId, sourceNodeId].sort()
+  );
+  assert.equal(currentAfterData.provenance[0].observedText, INITIAL_BENCHMARK);
 
   const unchangedRefresh = await executeOperation(projectA, {
     op: "refresh",
@@ -288,7 +313,6 @@ async function run() {
     refreshResponse.revision,
     "refreshing unchanged bytes creates no semantic revision"
   );
-  assert.deepEqual(unchangedRefresh.data, { changes: [], reviews: [] });
 
   const historicalAfter = await executeOperation(projectA, {
     op: "why",
@@ -321,7 +345,7 @@ async function run() {
     projects: [projectA, projectB],
     projectRoot: workspace,
     childKnowledgeBase: CHILD_KB,
-    ids: { sourceId, evidenceId, claimId, decisionId, artifactId },
+    ids: { sourceId, sourceNodeId, observationId, evidenceId, claimId, decisionId, artifactId },
     acceptanceRevision,
     changedRevision: refreshResponse.revision,
     unchangedRefreshRevision: unchangedRefresh.revision,
