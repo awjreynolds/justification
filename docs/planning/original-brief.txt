@@ -1,0 +1,524 @@
+Build a new open-source project called `justification`.
+
+Purpose
+-------
+
+Justification is a vendor-neutral, self-maintaining context and justification graph for agentic work.
+
+Its core principle is:
+
+"If something consequential exists, its justification should be traceable."
+
+The system should maintain durable project knowledge derived from conversations, documents, tools, APIs and other source systems.
+
+It must be able to answer:
+
+1. Why does this exist?
+2. What supports it?
+3. Is that support still valid?
+4. What conflicts with it?
+5. What depends on it?
+
+This is NOT:
+- an issue tracker
+- a document management system
+- an observability platform
+- a code graph
+- an AI memory system
+- a replacement for Jira, Linear, GitHub, GitNexus, Datadog, Slack, etc.
+
+Those systems remain authoritative for their own domains.
+
+Justification owns the reasoning, provenance and relationships between information derived from those systems.
+
+Architecture
+------------
+
+A repository/project may contain:
+
+kb/
+  shared/
+  adr-001/
+  adr-002/
+  prd-001/
+  research-001/
+
+`shared` contains project-wide knowledge.
+
+Other knowledge bases are scoped to a particular piece of work or output and inherit knowledge from `shared`.
+
+Examples include:
+- ADRs
+- PRDs
+- project plans
+- research reports
+- proposals
+- investigations
+- design documents
+
+One Justification runtime and MCP server must be capable of discovering and serving multiple projects and multiple KBs.
+
+Core domain concepts
+--------------------
+
+Start with a deliberately small model:
+
+Project
+KnowledgeBase
+Source
+Evidence
+Claim
+Assumption
+Requirement
+Question
+Option
+Decision
+Action
+Artifact
+Assertion
+Contradiction
+ChangeSet
+ReviewIssue
+
+Do not create a huge ontology.
+
+Relationships should include concepts such as:
+
+derived_from
+supports
+contradicts
+justifies
+depends_on
+satisfies
+rejects
+supersedes
+appears_in
+affects
+relevant_to
+
+Knowledge must have:
+- provenance
+- scope
+- temporal/freshness state
+- epistemic/trust state
+- dependency relationships
+
+Example epistemic states:
+
+asserted
+supported
+verified
+disputed
+contradicted
+rejected
+
+Example lifecycle/freshness states:
+
+fresh
+aging
+stale
+invalid
+superseded
+
+A claim being stale does not automatically make it false.
+
+Source model
+------------
+
+External systems are Knowledge Providers.
+
+Examples:
+
+GitNexus
+GitHub
+Jira
+Linear
+Slack
+Datadog
+files
+web sources
+databases
+meeting transcripts
+human input
+other MCP servers
+
+Do not reproduce best-in-class functionality from those systems.
+
+For example:
+
+GitNexus owns understanding of code structure.
+
+Justification may record:
+
+"AuthService currently depends on Redis"
+
+with provenance pointing to a GitNexus query at a specific repository revision.
+
+The provider remains the source of truth for the underlying code observation.
+
+Provider adapters should support some subset of:
+
+resolve()
+fetch()
+query()
+version()
+changedSince()
+fetchChanges()
+validate()
+watch()
+
+Providers may be:
+
+immutable
+versioned
+live
+
+They may also have change semantics:
+
+structural
+semantic
+hybrid
+
+Examples:
+
+GitHub: hybrid
+Jira: hybrid
+GitNexus: mostly structural
+Datadog: structural/hybrid
+Slack: semantic
+meeting transcripts: semantic
+
+Change detection
+----------------
+
+A fundamental design goal is to avoid repeatedly sending huge source corpora through an LLM.
+
+Separate:
+
+1. Change detection
+2. Change interpretation
+
+Change detection should be deterministic wherever possible.
+
+Examples:
+
+Git:
+commit SHA
+
+HTTP:
+ETag / Last-Modified / content hash
+
+Jira:
+updated timestamp / changelog / new comment IDs
+
+GitHub:
+event cursor / commits / PR updates
+
+files:
+mtime / hash
+
+Only when meaningful changes are detected should semantic interpretation happen.
+
+Introduce a ChangeSet abstraction.
+
+Example:
+
+ChangeSet:
+  Jira ENG-142 changed
+  2 new comments
+  status changed
+  GitHub has 3 new commits referencing ENG-142
+  Slack has 24 new messages in #project-x
+
+Use dependency-directed re-evaluation:
+
+source changed
+→ identify evidence depending on source
+→ identify claims depending on evidence
+→ identify decisions/actions/artifacts depending on claims
+→ semantically reassess only the affected subgraph
+
+Support:
+- on-demand refresh
+- scheduled refresh
+- event-driven refresh/webhooks
+
+Freshness policy belongs to the runtime, not the MCP protocol.
+
+Truth maintenance and contradiction handling
+--------------------------------------------
+
+Borrow concepts from:
+- Truth Maintenance Systems / ATMS
+- W3C PROV
+- SACM / Claims-Arguments-Evidence
+- IBIS / QOC
+- OSLC-style federated traceability
+
+Do not implement those standards wholesale.
+
+Use their concepts to make the model rigorous.
+
+Never silently resolve contradictions.
+
+Contradictions should be first-class reviewable objects.
+
+A contradiction may resolve as:
+- A supersedes B
+- B supersedes A
+- both valid in different scopes
+- both valid at different times
+- source error
+- unresolved
+
+Source changes should be capable of invalidating or weakening downstream justification.
+
+Example:
+
+GitNexus observation changes
+→ Evidence becomes historical
+→ Claim becomes stale/disputed
+→ Decision becomes needs-review
+→ ADR and migration plan are flagged as affected
+
+This is justification impact analysis.
+
+Knowledge scoping
+-----------------
+
+New knowledge must be classified into the appropriate scope.
+
+Possible dispositions:
+
+STORE_LOCAL
+STORE_SHARED
+PROMOTE_TO_PARENT
+REFERENCE_EXTERNAL
+IGNORE
+REVIEW
+
+Child KBs inherit from `shared`.
+
+Do not duplicate shared knowledge into every child KB.
+
+If a child discovers knowledge that appears project-wide, support explicit promotion into shared knowledge.
+
+If promotion conflicts with existing shared knowledge, create a ReviewIssue rather than silently overwriting it.
+
+Persistence
+-----------
+
+Use Open Knowledge Format (OKF) as the preferred portable representation for compiled knowledge.
+
+However:
+
+Justification must be OKF-compatible, not architecturally dependent on OKF.
+
+Create an isolated storage/serialization layer so other formats could be supported later.
+
+Markdown + YAML should remain readable without Justification installed.
+
+Derived indexes may use:
+- SQLite
+- FTS
+- graph indexes
+- optional vector search
+
+Derived indexes must be disposable and rebuildable from durable project state.
+
+Do not store credentials or transient polling state in committed OKF files.
+
+Separate:
+
+Durable semantic state:
+knowledge
+sources
+provenance
+relationships
+freshness policy
+verification state
+
+Operational state:
+poll cursors
+ETags
+content hashes
+last checked
+retry state
+cached provider results
+
+Consider maintaining an append-only source/event ledger so current knowledge can be rebuilt or reinterpreted later.
+
+OKF should be treated as a portable compiled knowledge projection rather than necessarily the only canonical event history.
+
+MCP
+---
+
+Provide one MCP server over the runtime.
+
+Do not require one MCP server per KB.
+
+Expose high-level knowledge operations rather than just filesystem CRUD.
+
+Candidate MCP operations:
+
+projects
+knowledge_bases
+context
+search
+why
+evidence
+trace
+impact
+changed
+refresh
+validate
+conflicts
+review
+promote
+inspect_source
+
+The most important APIs are likely:
+
+why(node)
+
+Returns the upstream justification chain.
+
+impact(node)
+
+Returns downstream dependent claims, decisions, actions and artifacts.
+
+context(project, kb, task, token_budget)
+
+Compiles the smallest relevant trusted context for an agent.
+
+refresh()
+
+Runs cheap change detection first and selectively re-evaluates only affected knowledge.
+
+audit()
+
+Checks provenance, freshness, contradictions, unsupported claims and affected artifacts.
+
+Artifacts
+---------
+
+An artifact is an output such as:
+
+ADR
+PRD
+report
+plan
+proposal
+presentation
+technical design
+
+Assertions inside an artifact should be traceable back through:
+
+artifact assertion
+→ decision / requirement / claim
+→ reasoning
+→ evidence
+→ source
+
+The system should eventually support answering:
+
+"Why is this sentence in this document?"
+
+and:
+
+"If this source changes, which document assertions need review?"
+
+Skills
+------
+
+Provide an optional agent skill alongside the runtime.
+
+The skill should teach agents how to work with Justification:
+
+- search existing knowledge before researching
+- distinguish evidence from interpretation
+- classify the scope of new knowledge
+- preserve provenance
+- do not silently resolve conflicts
+- use runtime operations rather than directly mutating graph state
+- promote knowledge only when appropriate
+- identify unresolved questions
+- prefer selective refresh over full rereads
+
+The skill is behavioural guidance.
+
+The runtime owns deterministic semantics.
+
+MVP
+---
+
+Do NOT attempt to build the entire vision initially.
+
+Build an MVP that proves the model.
+
+MVP should support:
+
+1. `justification init`
+2. project discovery
+3. `kb/shared`
+4. creation of child KBs
+5. OKF-compatible Markdown persistence
+6. Source
+7. Claim
+8. Decision
+9. Artifact
+10. provenance relationships
+11. child → shared inheritance
+12. `why`
+13. `impact`
+14. contradictions
+15. review issues
+16. one simple external provider
+17. MCP interface
+18. deterministic rebuild of derived indexes
+
+Use an ADR use case as the first end-to-end validation:
+
+Research several options
+→ capture sources
+→ create claims
+→ record requirements/constraints
+→ record decision
+→ generate or reference ADR
+→ trace ADR decision back to evidence
+→ modify one upstream source
+→ detect affected claim
+→ flag decision and ADR for review
+
+The implementation should remain local-first, model-independent and vendor-neutral.
+
+Design principles
+-----------------
+
+1. Own justification, not source systems.
+2. Evidence remains traceable to its authoritative provider.
+3. Never silently rewrite history.
+4. Supersede rather than erase.
+5. Contradictions are data.
+6. Freshness is first-class.
+7. Scope is first-class.
+8. Use deterministic software for deterministic work.
+9. Use LLMs primarily for semantic interpretation.
+10. Recompute only what changed and what depends on it.
+11. Every consequential thing should be able to explain why it exists.
+12. The user must retain useful readable knowledge even if Justification is removed.
+
+Start by:
+
+1. Writing the architecture and domain model.
+2. Researching the latest OKF specification before locking persistence details.
+3. Defining the minimum MVP schema.
+4. Defining the directory layout.
+5. Defining the provider interface.
+6. Defining the MCP contract.
+7. Writing ADRs for major architectural decisions.
+8. Implementing the smallest end-to-end vertical slice.
+
+Avoid premature UI work, vector databases, arbitrary graph complexity and SaaS infrastructure.
+
+The first goal is to prove that a project can accumulate justified knowledge across sessions and that a downstream artifact can be traced backwards to its evidence and forwards through impact when that evidence changes.
