@@ -1,207 +1,26 @@
 import { discoverProjects } from "./index.js";
 import { executeOperation } from "./runtime.js";
-import { NODE_KINDS, RELATIONSHIP_TYPES } from "./domain.js";
 import type { ProjectDescriptor } from "./index.js";
 import type { RuntimeRequest } from "./runtime.js";
+import { operationRequestSchemas, type OperationName } from "./requests.js";
 
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import type { StdioServerHandle } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod/v4";
 
-const applicabilitySchema = z
-  .object({
-    subject: z.string().optional(),
-    version: z.string().optional(),
-    validFrom: z.string().optional(),
-    validUntil: z.string().optional()
-  })
-  .strict();
-
-const fieldsSchema = z.record(z.string(), z.unknown());
 const projectIdSchema = z.string().min(1);
-const actorSchema = z.string().min(1);
-const atSchema = z.string().optional();
-const expectedRevisionSchema = z.number().int().nonnegative().optional();
 
-function withProject(shape: Record<string, z.ZodType>): z.ZodObject<any> {
-  return z
-    .object({
-      project_id: projectIdSchema,
-      ...shape
-    })
-    .strict();
+function withProject(schema: z.ZodObject<any>): z.ZodObject<any> {
+  return schema.extend({ project_id: projectIdSchema }).strict();
 }
 
-const requestSchemas = {
-  knowledge_bases: withProject({ kb: z.string().min(1).optional() }),
-  create_kb: withProject({
-    id: z.string().min(1),
-    title: z.string().min(1),
-    parent: z.string().min(1).optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  record: withProject({
-    id: z.string().min(1).optional(),
-    kb: z.string().min(1),
-    kind: z.enum(NODE_KINDS),
-    title: z.string().min(1),
-    body: z.string().optional(),
-    basis: z.array(z.string().min(1)).min(1).optional(),
-    basisGroups: z.array(z.array(z.string().min(1)).min(1)).min(1).optional(),
-    fields: fieldsSchema.optional(),
-    links: z
-      .array(
-        z
-          .object({
-            to: z.string().min(1),
-            type: z.enum(RELATIONSHIP_TYPES),
-            rationale: z.string().optional()
-          })
-          .strict()
-      )
-      .min(1)
-      .optional(),
-    applicability: applicabilitySchema.optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  justify: withProject({
-    conclusion: z.string().min(1),
-    groups: z
-      .array(
-        z.union([
-          z.array(z.string().min(1)).min(1),
-          z.object({ premises: z.array(z.string().min(1)).min(1) }).strict()
-        ])
-      )
-      .min(1),
-    rationale: z.string().min(1),
-    kb: z.string().min(1).optional(),
-    title: z.string().min(1).optional(),
-    applicability: applicabilitySchema.optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  relate: withProject({
-    from: z.string().min(1),
-    to: z.string().min(1),
-    type: z.enum(RELATIONSHIP_TYPES),
-    kb: z.string().min(1).optional(),
-    rationale: z.string().optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  capture_source: withProject({
-    locator: z.string().min(1),
-    kb: z.string().min(1).optional(),
-    title: z.string().min(1).optional(),
-    sourceId: z.string().min(1).optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  inspect_source: withProject({
-    sourceId: z.string().min(1).optional(),
-    locator: z.string().min(1).optional(),
-    kb: z.string().min(1).optional()
-  }),
-  evidence: withProject({
-    evidenceId: z.string().min(1).optional(),
-    sourceId: z.string().min(1).optional(),
-    kb: z.string().min(1).optional()
-  }),
-  why: withProject({
-    nodeId: z.string().min(1),
-    kb: z.string().min(1).optional(),
-    revision: z.number().int().nonnegative().optional(),
-    evaluationTime: z.string().optional()
-  }),
-  impact: withProject({
-    nodeId: z.string().min(1),
-    kb: z.string().min(1).optional(),
-    evaluationTime: z.string().optional()
-  }),
-  trace: withProject({
-    nodeId: z.string().min(1),
-    direction: z.enum(["upstream", "downstream"]).optional(),
-    kb: z.string().min(1).optional(),
-    budget: z.number().int().positive().optional(),
-    evaluationTime: z.string().optional()
-  }),
-  refresh: withProject({
-    sourceIds: z.array(z.string().min(1)).min(1).optional(),
-    kb: z.string().min(1).optional(),
-    evaluationTime: z.string().optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  changed: withProject({
-    sourceId: z.string().min(1).optional(),
-    kb: z.string().min(1).optional()
-  }),
-  context: withProject({
-    nodeId: z.string().min(1).optional(),
-    query: z.string().optional(),
-    kb: z.string().min(1).optional(),
-    budget: z.number().int().positive().optional(),
-    evaluationTime: z.string().optional()
-  }),
-  search: withProject({
-    query: z.string().min(1),
-    kb: z.string().min(1).optional(),
-    budget: z.number().int().positive().optional()
-  }),
-  contradict: withProject({
-    left: z.string().min(1),
-    right: z.string().min(1),
-    rationale: z.string().min(1),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  conflicts: withProject({ kb: z.string().min(1).optional() }),
-  review: withProject({
-    reviewId: z.string().min(1).optional(),
-    status: z.enum(["open", "closed"]).optional(),
-    rationale: z.string().optional(),
-    kb: z.string().min(1).optional(),
-    actor: actorSchema.optional(),
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  promote: withProject({
-    nodeId: z.string().min(1),
-    reason: z.string().optional(),
-    conflicts: z.array(z.string().min(1)).min(1).optional(),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  resolve_conflict: withProject({
-    contradictionId: z.string().min(1),
-    resolution: z.enum(["supersession", "different_scope", "different_time", "source_error", "unresolved"]),
-    rationale: z.string().min(1),
-    actor: actorSchema,
-    at: atSchema,
-    expectedRevision: expectedRevisionSchema
-  }),
-  audit: withProject({ kb: z.string().min(1).optional(), evaluationTime: z.string().optional() }),
-  rebuild: withProject({ actor: actorSchema.optional(), at: atSchema, expectedRevision: expectedRevisionSchema }),
-  export: withProject({
-    kb: z.string().min(1).optional(),
-    outputDir: z.string().min(1).optional(),
-    repair: z.boolean().optional()
-  })
-} as const;
-
-type OperationName = keyof typeof requestSchemas;
+const requestSchemas = Object.fromEntries(
+  (Object.keys(operationRequestSchemas) as OperationName[]).map(operation => [
+    operation,
+    withProject(operationRequestSchemas[operation])
+  ])
+) as Record<OperationName, z.ZodObject<any>>;
 
 const responseSchema = z.union([
   z.object({ revision: z.number().int().nonnegative(), data: z.unknown() }).strict(),

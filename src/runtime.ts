@@ -32,6 +32,7 @@ import { FileKnowledgeProvider, ProviderError } from "./provider.ts";
 import { ProjectionError, writeProjection } from "./serializer.ts";
 import { buildSupportTree, supportNodeIds, supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
+import { validateRuntimeRequest } from "./requests.ts";
 
 export type RuntimeErrorCode =
   | "INVALID_REQUEST"
@@ -706,6 +707,7 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
   if (!request || typeof request !== "object" || typeof request.op !== "string") {
     throw new RuntimeError("INVALID_REQUEST", "request must contain an operation discriminant");
   }
+  validateRuntimeRequest(request);
   const loaded = await ensureHistory(root);
   const current = loaded.revision;
   if (request.op === "knowledge_bases") {
