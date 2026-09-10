@@ -221,6 +221,7 @@ export const operationRequestSchemas = {
       left: z.string().min(1),
       right: z.string().min(1),
       rationale: z.string().min(1),
+      kb: z.string().min(1).optional(),
       actor: actorSchema,
       at: atSchema,
       expectedRevision: expectedRevisionSchema
@@ -254,6 +255,8 @@ export const operationRequestSchemas = {
     .object({
       contradictionId: z.string().min(1),
       resolution: z.enum(["supersession", "different_scope", "different_time", "source_error", "unresolved"]),
+      winnerId: z.string().min(1).optional(),
+      kb: z.string().min(1).optional(),
       rationale: z.string().min(1),
       actor: actorSchema,
       at: atSchema,

@@ -32,12 +32,20 @@ reproduced two additional declared-dependency omissions:
   source `impact` and received no review. Traversal must include direct source
   dependencies as well as retained evidence, with concrete paths.
 
-These two corrections are in progress. Parent verification
+Commit `05f595e` corrects both dependency findings. Each regression had an
+observed public RED before its minimum GREEN; exact review/impact sets and
+paths also verify that freshly matching evidence is not reviewed. Both Astra
+review axes returned no remaining actionable findings for the final source
+slice. Parent verification
 of the combined committed implementation passed typecheck and all 70 tests
 under Node 24.21.0.
 
 The Standards review found no new hard violations or material code smells. It
 requested exact review counts and uniqueness of `(nodeId, triggerId)` in the
 maintenance test, because converting IDs to a set could conceal duplicates in
-the first refresh. That additional verification is in progress; any immediately
-passing assertion will be recorded as coverage rather than historical RED.
+the first refresh. The final test includes exact counts, unique node/trigger
+pairs and converging support routes; the Standards re-review closed this
+coverage finding. Its immediately passing assertions are recorded as
+verification rather than historical RED. The later combined suite, including
+the real MCP maintenance lifecycle, passed all 74 tests before the next query
+slice introduced its intentional RED.

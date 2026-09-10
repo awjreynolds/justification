@@ -231,6 +231,92 @@ case-insensitive path collisions before completing scope acceptance.
   type and transition snapshot were narrowed. The 26-test runtime suite,
   typecheck and diff check pass after the cleanup.
 
+## Delivery decisions recorded by the review-closure slice
+
+- Review closure is an explicit mutation of one durable review record. It
+  requires a visible review ID, the `closed` status, a nonempty actor and
+  rationale, and stores normalized closure time plus a typed closure-history
+  entry. The original trigger and creation attribution remain unchanged.
+- An identical repeat with the current expected revision returns the same
+  review at the same semantic revision with `committed: false` and
+  `idempotent: true`; the transaction layer now supports this lock-aware
+  no-op result so idempotent retries do not publish a new history snapshot.
+  Stale expected revisions are still rejected, and differing closure metadata
+  conflicts rather than appending a second acknowledgment.
+- Closing a review records acknowledgment only. It does not refresh evidence,
+  make stale support usable or resolve contradictions. A later source change
+  creates a separate open review keyed by its new change trigger. The public
+  review fixture records the meaningful RED (0 passing, 1 failing) and GREEN
+  result (1 passing, 0 failing); the focused build and test run completed on
+  2026-09-10 under Node v24.21.0.
+
+## Delivery decisions recorded by the audit slice
+
+- The first audit contract is a read-only, revision-preserving report scoped to
+  shared plus the requested child. It reports unsupported decisions/artifacts,
+  missing claim/assertion provenance, stale source support, visible open
+  reviews, open contradictions and artifact file drift. Support status is
+  supplied by the runtime's existing assessment callback; artifact checks use
+  the bounded project-relative file provider and never rewrite files. The
+  first public fixture's RED and result shape are recorded in
+  [audit-tdd.md](../../docs/implementation/audit-tdd.md).
+
+## Delivery decisions recorded by the bounded query slice
+
+- Search, context and trace are read-only projections over the validated current
+  revision. Search and context summaries reuse the runtime's injected support
+  assessment and expose `supported`, `assumed`, `disputed` and `pending`
+  independently; lexical snippets remain excerpts rather than generated prose.
+- Context anchored on a node traverses declared support and retained source
+  provenance, omits its anchor, orders direct knowledge before outputs, and
+  supports a lexical filter when a query is supplied. Trace follows
+  justification, evidence-to-source and typed-link edges in either direction
+  with cycle-safe inclusive paths and deterministic reasons.
+- Query summaries keep review workflow independent from support. Each result
+  includes `reviewRequired` and sorted `openReviewIds`; an accepted alternative
+  can keep support usable while a changed original basis still requires review.
+  Review and contradiction triggers are filtered to the requested KB, so
+  child-owned work does not leak into shared queries.
+- All three query projections fit the complete `{ revision, data }` envelope by
+  UTF-8 byte length, returning a deterministic prefix with `truncated: true`
+  or a calculated minimum-envelope error. Public query fixtures recorded RED
+  and GREEN evidence in [query-tdd.md](../../docs/implementation/query-tdd.md).
+- The bounded query verification also exercised four large multibyte summaries
+  at a fixed near-boundary budget and the typed minimum-budget error for all
+  three operations. Two child KBs with shared and child-owned open
+  contradictions, reviews, public typed-link cycles and artifacts confirmed
+  exact scope isolation, dispute/review flags and finite cycle paths without
+  changing the query implementation.
+
+## Delivery decisions recorded by the contradiction and relationship slices
+
+- Contradictions are scoped records with explicit endpoint IDs, rationale,
+  attribution, status and resolution history. A child conflict can mention an
+  inherited shared endpoint, but its private record and review work remain
+  child-scoped. Supersession must name one endpoint as `winnerId`; other
+  resolutions preserve prior entries, while `unresolved` deliberately leaves
+  the conflict open. No resolution rewrites node support or content.
+- Contradiction and review metadata are rendered into the owning node's
+  readable OKF extension. Shared and sibling projections filter out a
+  child-owned contradiction, including its endpoint IDs and rationale; scoped
+  conflict, search and `why` queries apply the same visibility rule.
+- Relationships are attributed typed edges owned by their source node's KB.
+  They may point to inherited shared nodes and may form ordinary cycles, while
+  sibling child endpoints and shared traces reject or omit child-owned edges.
+  The public knowledge-actions fixture records the contradiction and
+  relationship red/green results: 2 passing/1 failing at each first
+  unsupported operation boundary, then 3 passing/0 failing after the bounded
+  handlers landed. The focused runs completed on 2026-09-10 under Node
+  v24.21.0; `npm run typecheck` and the package build are now green. The full
+  suite still has the unrelated unfinished `audit` dispatcher slice failing,
+  which remains with that implementation owner.
+- The owning node's Markdown body now renders review status/reasons and
+  closure rationale, plus conflict status and attributed resolution rationale,
+  in addition to the structured extension. A public RED first showed the
+  frontmatter-only projection was insufficient (1 passing, 2 failing), and the
+  focused knowledge-actions run is GREEN at 3 passing/0 failing after the
+  scoped body renderer was added.
+
 ## Out of scope
 
 - The broader vision beyond the original MVP: the delivery limits in the implementation contract remain explicit.

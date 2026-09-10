@@ -66,6 +66,14 @@ function justificationExtension(state: ProjectState, node: NodeRecord, supportTr
     .filter((relationship) => relationship.kb === node.kb && (relationship.from === node.id || relationship.to === node.id))
     .sort((a, b) => a.id.localeCompare(b.id))
     .map((relationship) => ({ ...relationship }));
+  const contradictions = state.contradictions
+    .filter((contradiction) => contradiction.kb === node.kb && (contradiction.left === node.id || contradiction.right === node.id))
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((contradiction) => ({ ...contradiction }));
+  const reviews = state.reviews
+    .filter((review) => review.nodeId === node.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
+    .map((review) => ({ ...review }));
   const provenance = supportProvenance(supportTree).map(({ source, observation }) => ({
     sourceId: source.id,
     observationId: observation.id,
@@ -88,6 +96,8 @@ function justificationExtension(state: ProjectState, node: NodeRecord, supportTr
     ...(node.fields ? { fields: node.fields } : {}),
     ...(justifications.length > 0 ? { justifications } : {}),
     ...(relationships.length > 0 ? { relationships } : {}),
+    ...(contradictions.length > 0 ? { contradictions } : {}),
+    ...(reviews.length > 0 ? { reviews } : {}),
     ...(provenance.length > 0 ? { provenance } : {})
   };
 }
@@ -126,7 +136,44 @@ function bodyFor(node: NodeRecord, state: ProjectState, supportTree: SupportTree
   if (node.fields?.observationId) lines.push(`Retained observation: ${node.fields.observationId}`);
   const reasoning = reasoningFor(node, state, supportTree);
   if (reasoning.length > 0) lines.push("", "## Justification", ...reasoning);
+  const maintenance = maintenanceFor(node, state);
+  if (maintenance.length > 0) lines.push("", ...maintenance);
   return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function maintenanceFor(node: NodeRecord, state: ProjectState): string[] {
+  const lines: string[] = [];
+  const reviews = state.reviews
+    .filter((review) => review.nodeId === node.id)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  if (reviews.length > 0) {
+    lines.push("## Review status");
+    for (const review of reviews) {
+      lines.push(`- Review ${review.id} (${review.status}): ${review.reason}`);
+      for (const closure of review.closureHistory ?? []) {
+        lines.push(`  Closure: ${closure.rationale} (by ${closure.actor} at ${closure.at})`);
+      }
+    }
+  }
+  const contradictions = state.contradictions
+    .filter((contradiction) => contradiction.kb === node.kb && (contradiction.left === node.id || contradiction.right === node.id))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  if (contradictions.length > 0) {
+    if (lines.length > 0) lines.push("");
+    lines.push("## Conflicts");
+    for (const contradiction of contradictions) {
+      const left = state.nodes[contradiction.left];
+      const right = state.nodes[contradiction.right];
+      const leftLabel = left === undefined ? contradiction.left : nodeLink(node, left);
+      const rightLabel = right === undefined ? contradiction.right : nodeLink(node, right);
+      lines.push(`- Contradiction ${contradiction.id} (${contradiction.status}) between ${leftLabel} and ${rightLabel}: ${contradiction.rationale}`);
+      for (const resolution of contradiction.resolutionHistory ?? []) {
+        const winner = resolution.winnerId === undefined ? "" : `; winner ${resolution.winnerId}`;
+        lines.push(`  Resolution ${resolution.resolution}${winner}: ${resolution.rationale} (by ${resolution.actor} at ${resolution.at})`);
+      }
+    }
+  }
+  return lines;
 }
 
 function reasoningFor(node: NodeRecord, state: ProjectState, supportTree: SupportTree): string[] {

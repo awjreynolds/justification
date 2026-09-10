@@ -95,3 +95,13 @@ test ! -e "$tmp/dist"
 
 Typecheck passed, the build created `dist/` as part of `npm test`, and all 54
 tests passed, including the process-level MCP/CLI tests.
+
+## Hosted verification after maintenance and recovery
+
+Run [34539100562](https://github.com/awjreynolds/justification/actions/runs/34539100562)
+completed successfully on commit `29fb7a5d1da3f7d3a5126f9847c3715a2d869287`.
+The hosted clean checkout installed the pinned dependencies, passed typecheck,
+built the executable and passed the 74-test suite. This closes the earlier
+fresh-checkout failure and verifies source maintenance, recovery, and the real
+MCP lifecycle on Ubuntu. Later knowledge-action and bounded-query work was
+still in progress locally and was not part of this run.

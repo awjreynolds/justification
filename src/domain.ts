@@ -159,6 +159,13 @@ export type ChangeRecord = Attribution & {
 
 export type ReviewStatus = "open" | "closed";
 
+export type ReviewClosure = {
+  readonly status: "closed";
+  readonly actor: string;
+  readonly at: string;
+  readonly rationale: string;
+};
+
 export type ReviewRecord = Attribution & {
   readonly id: string;
   readonly nodeId: string;
@@ -169,6 +176,7 @@ export type ReviewRecord = Attribution & {
   readonly closedBy?: string;
   readonly closedAt?: string;
   readonly closureRationale?: string;
+  readonly closureHistory?: readonly ReviewClosure[];
 };
 
 export type ContradictionResolution =
@@ -180,16 +188,19 @@ export type ContradictionResolution =
 
 export type ContradictionRecord = Attribution & {
   readonly id: string;
+  readonly kb: string;
   readonly left: string;
   readonly right: string;
   readonly rationale: string;
   readonly status: "open" | "resolved";
   readonly resolution?: ContradictionResolution;
+  readonly winnerId?: string;
   readonly resolvedBy?: string;
   readonly resolvedAt?: string;
   readonly resolutionRationale?: string;
   readonly resolutionHistory?: readonly {
     readonly resolution: ContradictionResolution;
+    readonly winnerId?: string;
     readonly actor: string;
     readonly at: string;
     readonly rationale: string;

@@ -21,6 +21,7 @@ import type {
   ProjectState,
   RelationshipRecord,
   RelationshipType,
+  ReviewClosure,
   ReviewRecord,
   ScopeChange,
   SourceAvailability,
@@ -35,6 +36,8 @@ import { handleRebuild } from "./recovery.ts";
 import { buildSupportTree, supportNodeIds, supportProvenance } from "./support-tree.ts";
 import type { SupportTree } from "./support-tree.ts";
 import { validateRuntimeRequest } from "./requests.ts";
+import { executeReadQuery } from "./queries.ts";
+import { executeAudit } from "./audit.ts";
 
 export type RuntimeErrorCode =
   | "INVALID_REQUEST"
@@ -82,11 +85,11 @@ export type RuntimeRequest =
   | { op: "changed"; sourceId?: string; kb?: string }
   | { op: "context"; nodeId?: string; query?: string; kb?: string; budget?: number; evaluationTime?: string }
   | { op: "search"; query: string; kb?: string; budget?: number }
-  | ({ op: "contradict"; left: string; right: string; rationale: string } & ActorRequest)
+  | ({ op: "contradict"; left: string; right: string; rationale: string; kb?: string } & ActorRequest)
   | { op: "conflicts"; kb?: string }
   | ({ op: "review"; reviewId?: string; status?: "open" | "closed"; rationale?: string; kb?: string } & Partial<ActorRequest>)
   | ({ op: "promote"; nodeId: string; reason?: string; conflicts?: string[] } & ActorRequest)
-  | ({ op: "resolve_conflict"; contradictionId: string; resolution: "supersession" | "different_scope" | "different_time" | "source_error" | "unresolved"; rationale: string } & ActorRequest)
+  | ({ op: "resolve_conflict"; contradictionId: string; resolution: "supersession" | "different_scope" | "different_time" | "source_error" | "unresolved"; winnerId?: string; kb?: string; rationale: string } & ActorRequest)
   | { op: "audit"; kb?: string; evaluationTime?: string }
   | ({ op: "rebuild" } & Partial<ActorRequest>)
   | { op: "export"; kb?: string; outputDir?: string; repair?: boolean };
@@ -655,6 +658,159 @@ function reviewsVisibleInKb(state: ProjectState, reviews: readonly ReviewRecord[
   });
 }
 
+function contradictionScope(state: ProjectState, left: NodeRecord, right: NodeRecord, requestedKb?: string): string {
+  if (left.id === right.id) throw new RuntimeError("INVALID_REQUEST", "a contradiction requires two distinct nodes");
+  if (requestedKb !== undefined) {
+    findKb(state, requestedKb);
+    visibleNode(state, left.id, requestedKb);
+    visibleNode(state, right.id, requestedKb);
+    return requestedKb;
+  }
+  if (left.kb === right.kb) return left.kb;
+  if (left.kb === "shared") return right.kb;
+  if (right.kb === "shared") return left.kb;
+  throw new RuntimeError("SCOPE_VIOLATION", "contradiction endpoints must share a visible knowledge-base scope", { left: left.id, right: right.id, leftKb: left.kb, rightKb: right.kb });
+}
+
+function visibleContradictions(state: ProjectState, kb?: string): ContradictionRecord[] {
+  if (kb !== undefined) findKb(state, kb);
+  return chronological(state.contradictions.filter((contradiction) => kb === undefined || contradiction.kb === "shared" || contradiction.kb === kb));
+}
+
+function contradictionById(state: ProjectState, id: string): ContradictionRecord {
+  const contradiction = state.contradictions.find((candidate) => candidate.id === id);
+  if (contradiction === undefined) throw new RuntimeError("NOT_FOUND", `contradiction not found: ${id}`, { contradictionId: id });
+  return contradiction;
+}
+
+function contradictionVisibleInKb(state: ProjectState, contradiction: ContradictionRecord, kb?: string): void {
+  if (kb === undefined) return;
+  findKb(state, kb);
+  if (contradiction.kb !== "shared" && contradiction.kb !== kb) {
+    throw new RuntimeError("SCOPE_VIOLATION", `contradiction ${contradiction.id} is outside knowledge base ${kb}`, { contradictionId: contradiction.id, kb });
+  }
+}
+
+function appendContradictionReviews(
+  draftState: MutableState,
+  contradiction: ContradictionRecord,
+  left: NodeRecord,
+  right: NodeRecord,
+  actor: string,
+  createdAt: string
+): ReviewRecord[] {
+  const reviews: ReviewRecord[] = [];
+  // A child-scoped contradiction may mention inherited shared knowledge, but
+  // its review work stays in the child so shared reads cannot expose it.
+  const nodeIds = [...new Set([left, right].filter((node) => node.kb === contradiction.kb).map((node) => node.id))];
+  for (const nodeId of nodeIds) {
+    if (draftState.reviews.some((review) => review.nodeId === nodeId && review.triggerId === contradiction.id)) continue;
+    const review: ReviewRecord = {
+      id: randomUUID(),
+      nodeId,
+      triggerType: "contradiction",
+      triggerId: contradiction.id,
+      reason: "explicit contradiction requires review",
+      status: "open",
+      createdBy: actor,
+      createdAt
+    };
+    draftState.reviews = [...draftState.reviews, review];
+    reviews.push(review);
+  }
+  return reviews;
+}
+
+async function handleContradict(root: string, request: Extract<RuntimeRequest, { op: "contradict" }>): Promise<RuntimeResponse> {
+  const actor = requireActor(request);
+  const loaded = await readHistory(root);
+  const left = nodeById(loaded.revision.state, request.left);
+  const right = nodeById(loaded.revision.state, request.right);
+  const kb = contradictionScope(loaded.revision.state, left, right, request.kb);
+  const rationale = assertRationale(request.rationale);
+  const createdAt = atTime(request.at);
+  const baseline = request.expectedRevision ?? loaded.revision.revision;
+  return commitMutation(root, actor, "contradict", baseline, (draftState) => {
+    const draftLeft = visibleNode(draftState, left.id, kb);
+    const draftRight = visibleNode(draftState, right.id, kb);
+    const contradiction: ContradictionRecord = {
+      id: randomUUID(),
+      kb,
+      left: draftLeft.id,
+      right: draftRight.id,
+      rationale,
+      status: "open",
+      createdBy: actor,
+      createdAt
+    };
+    const draft = mutableState(draftState);
+    draft.contradictions = [...draft.contradictions, contradiction];
+    const reviews = appendContradictionReviews(draft, contradiction, draftLeft, draftRight, actor, createdAt);
+    return { state: draftState, value: { contradiction, reviews, committed: true } };
+  });
+}
+
+async function handleConflicts(root: string, request: Extract<RuntimeRequest, { op: "conflicts" }>): Promise<RuntimeResponse> {
+  const loaded = await readHistory(root);
+  const contradictions = visibleContradictions(loaded.revision.state, request.kb);
+  return {
+    revision: loaded.revision.revision,
+    data: {
+      conflicts: contradictions,
+      contradictions,
+      scope: request.kb === undefined ? undefined : { kb: request.kb }
+    }
+  };
+}
+
+type ResolutionHistoryEntry = NonNullable<ContradictionRecord["resolutionHistory"]>[number];
+
+async function handleResolveConflict(root: string, request: Extract<RuntimeRequest, { op: "resolve_conflict" }>): Promise<RuntimeResponse> {
+  const actor = requireActor(request);
+  const loaded = await readHistory(root);
+  const existing = contradictionById(loaded.revision.state, request.contradictionId);
+  contradictionVisibleInKb(loaded.revision.state, existing, request.kb);
+  if (request.resolution === "supersession") {
+    if (request.winnerId === undefined) throw new RuntimeError("INVALID_REQUEST", "supersession resolution requires winnerId");
+    if (request.winnerId !== existing.left && request.winnerId !== existing.right) throw new RuntimeError("INVALID_REQUEST", "supersession winnerId must be one contradiction endpoint", { winnerId: request.winnerId, left: existing.left, right: existing.right });
+  } else if (request.winnerId !== undefined) {
+    throw new RuntimeError("INVALID_REQUEST", "winnerId is only valid for supersession resolution");
+  }
+  const rationale = assertRationale(request.rationale);
+  const resolvedAt = atTime(request.at);
+  const baseline = request.expectedRevision ?? loaded.revision.revision;
+  return commitMutation(root, actor, "resolve_conflict", baseline, (draftState) => {
+    const current = contradictionById(draftState, request.contradictionId);
+    contradictionVisibleInKb(draftState, current, request.kb);
+    if (request.resolution === "supersession") {
+      if (request.winnerId === undefined || (request.winnerId !== current.left && request.winnerId !== current.right)) {
+        throw new RuntimeError("INVALID_REQUEST", "supersession winnerId must be one contradiction endpoint", { winnerId: request.winnerId, left: current.left, right: current.right });
+      }
+    } else if (request.winnerId !== undefined) {
+      throw new RuntimeError("INVALID_REQUEST", "winnerId is only valid for supersession resolution");
+    }
+    const entry: ResolutionHistoryEntry = {
+      resolution: request.resolution,
+      ...(request.resolution === "supersession" ? { winnerId: request.winnerId } : {}),
+      actor,
+      at: resolvedAt,
+      rationale
+    };
+    const { resolvedBy: _resolvedBy, resolvedAt: _resolvedAt, resolutionRationale: _resolutionRationale, winnerId: _winnerId, ...withoutLatest } = current;
+    const updated: ContradictionRecord = {
+      ...withoutLatest,
+      status: request.resolution === "unresolved" ? "open" : "resolved",
+      resolution: request.resolution,
+      ...(request.resolution === "supersession" ? { winnerId: request.winnerId } : {}),
+      ...(request.resolution === "unresolved" ? {} : { resolvedBy: actor, resolvedAt, resolutionRationale: rationale }),
+      resolutionHistory: [...(current.resolutionHistory ?? []), entry]
+    };
+    const draft = mutableState(draftState);
+    draft.contradictions = draft.contradictions.map((contradiction) => contradiction.id === current.id ? updated : contradiction);
+    return { state: draftState, value: { contradiction: updated, committed: true } };
+  });
+}
+
 function supportSourceIds(tree: SupportTree): string[] {
   const result = new Set<string>();
   const visit = (current: SupportTree): void => {
@@ -995,8 +1151,39 @@ async function handleImpact(root: string, request: Extract<RuntimeRequest, { op:
 
 async function handleReview(root: string, request: Extract<RuntimeRequest, { op: "review" }>): Promise<RuntimeResponse> {
   const loaded = await readHistory(root);
-  if (request.reviewId !== undefined || request.actor !== undefined || request.rationale !== undefined) {
-    throw new RuntimeError("INVALID_REQUEST", "review mutations are not available in the source maintenance slice");
+  const isMutation = request.reviewId !== undefined || request.actor !== undefined || request.rationale !== undefined || request.expectedRevision !== undefined;
+  if (isMutation) {
+    if (request.reviewId === undefined) throw new RuntimeError("INVALID_REQUEST", "review mutations require reviewId");
+    if (request.status !== "closed") throw new RuntimeError("INVALID_REQUEST", "review mutations only support closing a review");
+    const actor = requireActor(request as ActorRequest);
+    const rationale = assertRationale(request.rationale);
+    const closedAt = atTime(request.at);
+    const reviewId = request.reviewId;
+    const baseline = request.expectedRevision ?? loaded.revision.revision;
+    return commitMutation(root, actor, "review", baseline, (draftState) => {
+      const draft = mutableState(draftState);
+      const current = draft.reviews.find((review) => review.id === reviewId);
+      if (current === undefined) throw new RuntimeError("NOT_FOUND", `review not found: ${reviewId}`, { reviewId });
+      visibleNode(draftState, current.nodeId, request.kb);
+      if (current.status === "closed") {
+        const history = current.closureHistory ?? [];
+        const sameClosure = current.closedBy === actor && current.closedAt === closedAt && current.closureRationale === rationale &&
+          history.length > 0 && history[history.length - 1]?.actor === actor && history[history.length - 1]?.at === closedAt && history[history.length - 1]?.rationale === rationale;
+        if (!sameClosure) throw new RuntimeError("CONFLICT", `review ${reviewId} is already closed with different closure metadata`, { reviewId });
+        return { state: draftState, value: { review: current, committed: false, idempotent: true }, committed: false };
+      }
+      const closure: ReviewClosure = { status: "closed", actor, at: closedAt, rationale };
+      const updated: ReviewRecord = {
+        ...current,
+        status: "closed",
+        closedBy: actor,
+        closedAt,
+        closureRationale: rationale,
+        closureHistory: [...(current.closureHistory ?? []), closure]
+      };
+      draft.reviews = draft.reviews.map((review) => review.id === reviewId ? updated : review);
+      return { state: draftState, value: { review: updated, committed: true, idempotent: false } };
+    });
   }
   const reviews = scopedReviews(loaded.revision.state, request.kb).filter((review) => request.status === undefined || review.status === request.status);
   return {
@@ -1144,6 +1331,51 @@ async function handleJustify(root: string, request: Extract<RuntimeRequest, { op
     };
     draft.justifications[j.id] = j;
     return { state: draftState, value: { justification: j, committed: true } };
+  });
+}
+
+function relationshipScope(state: ProjectState, fromId: string, toId: string, requestedKb?: string): { readonly from: NodeRecord; readonly to: NodeRecord; readonly kb: string } {
+  const from = nodeById(state, fromId);
+  const to = nodeById(state, toId);
+  const kb = requestedKb ?? from.kb;
+  findKb(state, kb);
+  if (from.kb !== kb) {
+    throw new RuntimeError("SCOPE_VIOLATION", `relationship owner ${from.id} is outside knowledge base ${kb}`, { from: from.id, fromKb: from.kb, kb });
+  }
+  visibleNode(state, from.id, kb);
+  visibleNode(state, to.id, kb);
+  return { from, to, kb };
+}
+
+function relationshipRationale(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (value.trim().length === 0) throw new RuntimeError("INVALID_RELATIONSHIP", "relationship rationale must be nonempty when provided");
+  return value.trim();
+}
+
+async function handleRelate(root: string, request: Extract<RuntimeRequest, { op: "relate" }>): Promise<RuntimeResponse> {
+  const actor = requireActor(request);
+  const loaded = await readHistory(root);
+  const scoped = relationshipScope(loaded.revision.state, request.from, request.to, request.kb);
+  if (!RELATIONSHIP_TYPES.includes(request.type)) throw new RuntimeError("INVALID_RELATIONSHIP", `unsupported relationship type: ${String(request.type)}`);
+  const rationale = relationshipRationale(request.rationale);
+  const createdAt = atTime(request.at);
+  const baseline = request.expectedRevision ?? loaded.revision.revision;
+  return commitMutation(root, actor, "relate", baseline, (draftState) => {
+    const draftScoped = relationshipScope(draftState, scoped.from.id, scoped.to.id, scoped.kb);
+    const relationship: RelationshipRecord = {
+      id: randomUUID(),
+      kb: draftScoped.kb,
+      from: draftScoped.from.id,
+      to: draftScoped.to.id,
+      type: request.type,
+      ...(rationale === undefined ? {} : { rationale }),
+      createdBy: actor,
+      createdAt
+    };
+    const draft = mutableState(draftState);
+    draft.relationships[relationship.id] = relationship;
+    return { state: draftState, value: { relationship, committed: true } };
   });
 }
 
@@ -1313,9 +1545,20 @@ export async function executeOperation(rootInput: string, request: RuntimeReques
   if (request.op === "changed") return handleChanged(root, request);
   if (request.op === "record") return handleRecord(root, request);
   if (request.op === "justify") return handleJustify(root, request);
+  if (request.op === "relate") return handleRelate(root, request);
   if (request.op === "why") return handleWhy(root, request);
+  if (request.op === "search" || request.op === "context" || request.op === "trace") return executeReadQuery(current, request, { assessNode });
+  if (request.op === "audit") {
+    return {
+      revision: current.revision,
+      data: await executeAudit(root, current, request, { assessNode, scopedReviews, visibleContradictions })
+    };
+  }
   if (request.op === "impact") return handleImpact(root, request);
+  if (request.op === "contradict") return handleContradict(root, request);
+  if (request.op === "conflicts") return handleConflicts(root, request);
   if (request.op === "review") return handleReview(root, request);
+  if (request.op === "resolve_conflict") return handleResolveConflict(root, request);
   if (request.op === "rebuild") return handleRebuild(root, request);
   if (request.op === "export") {
     if (request.kb !== undefined) findKb(current.state, request.kb);

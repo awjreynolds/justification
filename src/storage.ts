@@ -179,6 +179,11 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
     if (!isRecord(value) || value.id !== id || typeof value.kb !== "string" || !hasOwn(kbs, value.kb) || typeof value.from !== "string" || !hasOwn(nodes, value.from) || typeof value.to !== "string" || !hasOwn(nodes, value.to) || typeof value.type !== "string" || !RELATIONSHIP_TYPES.includes(value.type as (typeof RELATIONSHIP_TYPES)[number])) {
       throw new StorageError("HISTORY_CORRUPT", `relationship ${id} has a dangling endpoint or invalid knowledge base reference`);
     }
+    const from = nodes[value.from] as Record<string, unknown>;
+    const to = nodes[value.to] as Record<string, unknown>;
+    if (from.kb !== value.kb || (to.kb !== "shared" && to.kb !== value.kb)) {
+      throw new StorageError("HISTORY_CORRUPT", `relationship ${id} crosses its owning knowledge-base scope`);
+    }
   }
   for (const change of state.changes as unknown[]) {
     if (!isRecord(change) || typeof change.sourceId !== "string" || !hasOwn(sources, change.sourceId)) throw new StorageError("HISTORY_CORRUPT", "history contains a change with a dangling source reference");
@@ -187,10 +192,63 @@ function validateState(state: unknown, identity: ProjectIdentity): asserts state
     }
   }
   for (const contradiction of state.contradictions as unknown[]) {
-    if (!isRecord(contradiction) || typeof contradiction.left !== "string" || !hasOwn(nodes, contradiction.left) || typeof contradiction.right !== "string" || !hasOwn(nodes, contradiction.right)) throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with a dangling node reference");
+    if (!isRecord(contradiction) || typeof contradiction.id !== "string" || typeof contradiction.kb !== "string" || !hasOwn(kbs, contradiction.kb) || typeof contradiction.left !== "string" || !hasOwn(nodes, contradiction.left) || typeof contradiction.right !== "string" || !hasOwn(nodes, contradiction.right) || contradiction.left === contradiction.right || typeof contradiction.rationale !== "string" || !["open", "resolved"].includes(String(contradiction.status))) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with a dangling node reference or invalid state");
+    }
+    const left = nodes[contradiction.left] as Record<string, unknown>;
+    const right = nodes[contradiction.right] as Record<string, unknown>;
+    if ((contradiction.kb === "shared" && (left.kb !== "shared" || right.kb !== "shared")) || (contradiction.kb !== "shared" && left.kb !== "shared" && left.kb !== contradiction.kb) || (contradiction.kb !== "shared" && right.kb !== "shared" && right.kb !== contradiction.kb)) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction outside its owning knowledge-base scope");
+    }
+    if (contradiction.resolution !== undefined && !["supersession", "different_scope", "different_time", "source_error", "unresolved"].includes(String(contradiction.resolution))) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with an invalid resolution");
+    }
+    if (contradiction.status === "resolved" && contradiction.resolution === undefined) {
+      throw new StorageError("HISTORY_CORRUPT", "resolved contradiction is missing its resolution");
+    }
+    if (contradiction.resolution === "unresolved" && contradiction.status !== "open") {
+      throw new StorageError("HISTORY_CORRUPT", "unresolved contradiction must remain open");
+    }
+    if (contradiction.resolution === "supersession" && contradiction.winnerId === undefined) {
+      throw new StorageError("HISTORY_CORRUPT", "superseded contradiction is missing its winner");
+    }
+    if (contradiction.resolution !== "supersession" && contradiction.winnerId !== undefined) {
+      throw new StorageError("HISTORY_CORRUPT", "contradiction winner is only valid for supersession");
+    }
+    if (contradiction.winnerId !== undefined && (typeof contradiction.winnerId !== "string" || (contradiction.winnerId !== contradiction.left && contradiction.winnerId !== contradiction.right))) {
+      throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with an invalid supersession winner");
+    }
+    if (contradiction.resolutionHistory !== undefined) {
+      if (!Array.isArray(contradiction.resolutionHistory)) throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with invalid resolution history");
+      for (const entry of contradiction.resolutionHistory) {
+        if (!isRecord(entry) || !["supersession", "different_scope", "different_time", "source_error", "unresolved"].includes(String(entry.resolution)) || typeof entry.actor !== "string" || typeof entry.at !== "string" || typeof entry.rationale !== "string") {
+          throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with invalid resolution history");
+        }
+        if (entry.winnerId !== undefined && (typeof entry.winnerId !== "string" || (entry.winnerId !== contradiction.left && entry.winnerId !== contradiction.right))) {
+          throw new StorageError("HISTORY_CORRUPT", "history contains a contradiction with an invalid resolution winner");
+        }
+        if (entry.resolution === "supersession" && entry.winnerId === undefined) {
+          throw new StorageError("HISTORY_CORRUPT", "history contains a supersession without a winner");
+        }
+        if (entry.resolution !== "supersession" && entry.winnerId !== undefined) {
+          throw new StorageError("HISTORY_CORRUPT", "history contains a non-supersession winner");
+        }
+      }
+    }
   }
   for (const review of state.reviews as unknown[]) {
-    if (!isRecord(review) || typeof review.nodeId !== "string" || !hasOwn(nodes, review.nodeId) || typeof review.triggerId !== "string") throw new StorageError("HISTORY_CORRUPT", "history contains a review with a dangling node reference");
+    if (!isRecord(review) || typeof review.id !== "string" || typeof review.nodeId !== "string" || !hasOwn(nodes, review.nodeId) || typeof review.triggerId !== "string" || !["change", "contradiction", "artifact_drift", "promotion_conflict"].includes(String(review.triggerType)) || !["open", "closed"].includes(String(review.status))) throw new StorageError("HISTORY_CORRUPT", "history contains a review with a dangling node reference or invalid state");
+    if (review.status === "closed" && (typeof review.closedBy !== "string" || typeof review.closedAt !== "string" || typeof review.closureRationale !== "string")) {
+      throw new StorageError("HISTORY_CORRUPT", "closed review is missing closure metadata");
+    }
+    if (review.closureHistory !== undefined) {
+      if (!Array.isArray(review.closureHistory) || review.closureHistory.length === 0 || review.status !== "closed") throw new StorageError("HISTORY_CORRUPT", "history contains a review with invalid closure history");
+      for (const closure of review.closureHistory) {
+        if (!isRecord(closure) || closure.status !== "closed" || typeof closure.actor !== "string" || typeof closure.at !== "string" || typeof closure.rationale !== "string") {
+          throw new StorageError("HISTORY_CORRUPT", "history contains a review with invalid closure history");
+        }
+      }
+    }
   }
   for (const change of state.scopeChanges as unknown[]) {
     if (!isRecord(change) || typeof change.nodeId !== "string" || !hasOwn(nodes, change.nodeId) || typeof change.from !== "string" || !hasOwn(kbs, change.from) || typeof change.to !== "string" || !hasOwn(kbs, change.to)) throw new StorageError("HISTORY_CORRUPT", "history contains a scope change with a dangling reference");
@@ -293,6 +351,13 @@ export type TransactionResult<T> = {
   readonly committed: boolean;
 };
 
+type TransactionMutation<T> = {
+  readonly state: ProjectState;
+  readonly value: T;
+  /** A mutation may return false when an already-committed request is idempotent. */
+  readonly committed?: boolean;
+};
+
 export class PostCommitError extends Error {
   readonly name = "PostCommitError";
   readonly revision: HistoryRevision;
@@ -341,7 +406,7 @@ export async function transact<T>(
   root: string,
   actor: string,
   action: string,
-  mutate: (state: ProjectState, nextRevision: number) => { state: ProjectState; value: T },
+  mutate: (state: ProjectState, nextRevision: number) => TransactionMutation<T>,
   afterCommit?: (revision: HistoryRevision, value: T) => Promise<void>
 ): Promise<TransactionResult<T>> {
   await ensureHistory(root);
@@ -350,6 +415,9 @@ export async function transact<T>(
     const fresh = await readHistory(root);
     const nextRevision = fresh.revision.revision + 1;
     const proposed = mutate(structuredClone(fresh.revision.state), nextRevision);
+    if (proposed.committed === false) {
+      return { revision: fresh.revision, value: proposed.value, committed: false };
+    }
     validateState(proposed.state, fresh.identity);
     const unsigned = {
       format: HISTORY_FORMAT,

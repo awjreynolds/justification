@@ -6,6 +6,13 @@ contract.
 
 ## Examples and docs
 
+Commit `84959f8` makes a general research-output workflow the default demo.
+`examples/knowledge-output-demo.mjs` captures two independent fictional sources,
+records justified claims and an open question, writes a Markdown brief, and
+records that artifact directly against its claims without inventing a decision.
+Changing one source proves exact affected and unaffected sets and preserves
+the historical explanation and original output file.
+
 - Added the deterministic fictional checkout-cache ADR fixture in
   `examples/adr-fixture.md`.
 - Added `examples/adr-demo.mjs`, which creates two safe isolated project roots,
@@ -18,11 +25,12 @@ contract.
   `docs/recovery.md` for actual descriptor/history/projection/provider error
   handling.
 
-The demo currently follows `docs/implementation/runtime-api.md` and waits for
-the runtime implementation to settle its concrete response payloads. Run
-`node --check examples/adr-demo.mjs` now; run the full demo after the runtime
-and CLI slices are green. If response field names differ, update only the demo
-extractors/assertions to match observed public results.
+Both `npm run demo` and `npm run demo:adr` passed against the public runtime,
+including exact impact and review assertions. These are integration
+verification, not retroactive test-first evidence. The worker also ran the
+full then-current test suite (72 passing), typecheck and syntax checks.
+Remaining runtime operations and final delivery checks are still tracked in
+the acceptance evidence; passing examples do not establish full completion.
 
 ## Coordination
 

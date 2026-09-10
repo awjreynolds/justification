@@ -24,11 +24,11 @@ type RuntimeRequest =
   | { op: "changed"; sourceId?: string; kb?: string }
   | { op: "context"; nodeId?: string; query?: string; kb?: string; budget?: number; evaluationTime?: string }
   | { op: "search"; query: string; kb?: string; budget?: number }
-  | { op: "contradict"; left: string; right: string; rationale: string; actor: string }
+  | { op: "contradict"; left: string; right: string; rationale: string; actor: string; kb?: string }
   | { op: "conflicts"; kb?: string }
   | { op: "review"; reviewId?: string; status?: "open" | "closed"; actor?: string; rationale?: string; kb?: string }
   | { op: "promote"; nodeId: string; actor: string; expectedRevision?: number; reason?: string; conflicts?: string[] }
-  | { op: "resolve_conflict"; contradictionId: string; resolution: "supersession" | "different_scope" | "different_time" | "source_error" | "unresolved"; rationale: string; actor: string; expectedRevision?: number }
+  | { op: "resolve_conflict"; contradictionId: string; resolution: "supersession" | "different_scope" | "different_time" | "source_error" | "unresolved"; rationale: string; actor: string; winnerId?: string; kb?: string; expectedRevision?: number }
   | { op: "audit"; kb?: string; evaluationTime?: string }
   | { op: "rebuild"; actor?: string }
   | { op: "export"; kb?: string; outputDir?: string };
@@ -176,3 +176,253 @@ An observation exposes that digest as `observedBytesDigest`, uses the same
 content address as its `digest` for text, and records
 `providerRevision: "sha256:<hex>"`. Filesystem mtime/size may be used as a
 transient pre-read stability check but never replace this durable revision.
+
+## Contradictions, review closure and typed relationships
+
+`contradict` creates an attributed open record with `kb`, `left`, `right` and
+`rationale`. The owning scope may name an inherited shared endpoint; child
+conflict records and their review work remain private to that child. The
+`conflicts` read returns visible records in both `conflicts` and
+`contradictions` fields for transport compatibility. `resolve_conflict`
+appends an attributed `{ resolution, actor, at, rationale }` entry to
+`resolutionHistory`; `supersession` additionally requires `winnerId` to equal
+one endpoint. It sets the record to `resolved`, while `unresolved` records the
+attempt and leaves it `open`. Resolution never changes node content or
+declared support. Contradiction and review records are rendered only in the
+owning node's extension, so shared and sibling projections do not expose a
+child-owned conflict.
+
+`review` with only `status` and/or `kb` lists visible records. Its mutation form
+requires `reviewId`, `status: "closed"`, a nonempty actor and rationale, and
+returns the closed record with `closedBy`, `closedAt`, `closureRationale` and a
+typed `closureHistory` entry. Repeating the same closure at the current
+expected revision is a no-op response with `committed: false` and
+`idempotent: true`; a later source change creates a distinct open review.
+
+`relate` creates an attributed typed relationship owned by its `from` node's
+KB. The target may be inherited shared knowledge, but a sibling child target
+is rejected. Ordinary typed relationships may cycle; `trace` uses visited
+paths to terminate and scoped traces omit child-owned edges.
+
+## Read-query result shapes
+
+The read-only `search`, `context` and `trace` operations use the same
+`{ revision, data }` envelope. Their result entries are compact summaries so a
+caller can enforce a byte budget without receiving an unbounded Markdown body.
+The summary shape is:
+
+```ts
+type QueryNode = {
+  id: string;
+  kb: string;
+  kind: NodeKind;
+  title: string;
+  snippet: string;
+};
+
+type QueryResult = QueryNode & {
+  flags: {
+    supported: boolean;
+    assumed: boolean;
+    disputed: boolean;
+    pending: boolean;
+  };
+  support: {
+    status: "usable" | "pending" | "unusable";
+    reason: string;
+  };
+  reviewRequired: boolean;
+  openReviewIds: string[];
+};
+
+type QueryScope = { kb: string | null };
+```
+
+`snippet` is the node body after whitespace collapse, falling back to the title
+when the body is empty, and is capped at 240 characters. It is a lexical
+excerpt, never an inferred or paraphrased claim. Search
+normalizes the trimmed query and node text to NFC and lower case, requires all
+nonempty query terms to occur in the title or body, and orders matches by total
+term occurrence count descending, then title and ID in deterministic lexical
+order. Source, evidence and all other visible node kinds are searchable. Both
+`search` and `context` add the same runtime support assessment and orthogonal
+knowledge flags to every returned result.
+
+`search` returns:
+
+```json
+{
+  "query": "café",
+  "scope": { "kb": "shared" },
+  "results": [
+    {
+      "id": "node-id",
+      "kb": "shared",
+      "kind": "claim",
+      "title": "Café pilot",
+      "snippet": "The café pilot favors a weekly digest.",
+      "flags": {
+        "supported": false,
+        "assumed": false,
+        "disputed": false,
+        "pending": true
+      },
+      "support": {
+        "status": "pending",
+        "reason": "no declared support basis"
+      },
+      "reviewRequired": false,
+      "openReviewIds": []
+    }
+  ],
+  "truncated": false
+}
+```
+
+`context` returns relevant knowledge in a scope. With `nodeId`, the anchor's
+declared support and source provenance are eligible; with `query`, lexical
+matching selects eligible nodes. Direct claim, assumption, requirement,
+question and option knowledge is ordered before decisions, actions and
+artifacts so an output can reuse knowledge without inventing a decision. When
+`nodeId` is supplied, the anchor itself is omitted from `results`; the returned
+entries are the visible knowledge that explains or contextualizes it. Every
+entry carries orthogonal flags and the existing support assessment:
+
+```json
+{
+  "scope": { "kb": "research" },
+  "anchor": { "id": "artifact-id", "kind": "artifact" },
+  "results": [
+    {
+      "id": "claim-id",
+      "kb": "research",
+      "kind": "claim",
+      "title": "Retained finding",
+      "snippet": "The retained finding...",
+      "flags": {
+        "supported": true,
+        "assumed": false,
+        "disputed": false,
+        "pending": false
+      },
+      "support": {
+        "status": "usable",
+        "reason": "declared basis is usable"
+      },
+      "reviewRequired": false,
+      "openReviewIds": []
+    }
+  ],
+  "truncated": false
+}
+```
+
+`supported` means that a declared basis is currently usable according to the
+runtime checks. `assumed` identifies an explicit assumption node, `disputed`
+identifies participation in an open contradiction, and `pending` reflects a
+pending support assessment. These flags can coexist; none asserts semantic
+truth. A node with no usable declared support remains visible with its support
+status and reason. `reviewRequired` and `openReviewIds` report currently open
+review work for that node independently of support; a usable alternative can
+therefore coexist with an open review for a changed original basis. Review IDs
+are sorted deterministically and are filtered to the requested KB's visible
+change or contradiction trigger.
+
+`trace` follows the declared graph from one visible node. `direction` defaults
+to `upstream`; `upstream` follows justification and decision/artifact basis
+premises, retained evidence to its source node, and the target of a typed
+relationship. `downstream` follows those edges in reverse. It is cycle-safe
+and includes typed-link reasons as well as declared support and source
+provenance; it does not infer edges from prose.
+
+```json
+{
+  "scope": { "kb": "research" },
+  "root": { "id": "artifact-id", "kb": "research", "kind": "artifact", "title": "Research brief" },
+  "direction": "upstream",
+  "results": [
+    {
+      "id": "claim-id",
+      "kb": "research",
+      "kind": "claim",
+      "title": "Retained finding",
+      "snippet": "The retained finding...",
+      "paths": [["artifact-id", "claim-id", "evidence-id", "source-node-id"]],
+      "reasons": ["declared basis", "source provenance"]
+    }
+  ],
+  "truncated": false
+}
+```
+
+The `paths` arrays are inclusive ID paths from the root to each result. An
+entry may have multiple paths and deduplicated reasons. Results never expose a
+sibling KB when `kb` selects a child; shared nodes remain visible through the
+requested child scope, while child-owned nodes, reviews and contradictions
+remain private to that child.
+
+All three operations accept an optional positive integer `budget`. It is the
+maximum number of UTF-8 bytes in `JSON.stringify({ revision, data })`, including
+the envelope, query text, summaries, paths and the `truncated` flag. An omitted
+budget defaults to 32 KiB. Results are added in deterministic order until the
+complete envelope would exceed the cap; the operation then returns the fitting
+prefix with `truncated: true`. If even the empty result envelope cannot fit,
+the operation fails with `INVALID_REQUEST` and reports the calculated
+`minimumBudget` in its error details. A budget is therefore a real response
+bound, not a token or character hint; callers should measure the returned
+envelope with `Buffer.byteLength(JSON.stringify(response), "utf8")`.
+
+## Audit result
+
+`audit` is a read-only diagnostic over the current validated revision. It
+returns the normal `{ revision, data }` envelope and never refreshes a source,
+closes a review, rewrites an artifact or commits a semantic revision. The
+optional `kb` selects shared knowledge plus that child knowledge base; sibling
+nodes, reviews and contradictions are excluded. `evaluationTime` defaults to
+the current revision's commit time and is returned as an offset-normalized ISO
+timestamp.
+
+```ts
+type AuditCategory =
+  | "unsupported"
+  | "missing_provenance"
+  | "source_freshness"
+  | "open_review"
+  | "artifact_drift"
+  | "open_contradiction";
+
+type AuditFinding = {
+  category: AuditCategory;
+  nodeId?: string;
+  kind?: NodeKind;
+  sourceId?: string;
+  reviewId?: string;
+  contradictionId?: string;
+  locator?: string;
+  status?: string;
+  reason: string;
+};
+
+type AuditData = {
+  scope: { kb: string | null };
+  evaluationTime: string;
+  findings: readonly AuditFinding[];
+};
+```
+
+An `unsupported` finding identifies a decision or artifact whose declared
+bases are not currently usable according to the runtime support assessment.
+`missing_provenance` identifies a claim or assertion without a declared path
+to retained source evidence. `source_freshness` identifies a source whose
+retained evidence no longer matches its current provider observation.
+`open_review` carries the affected node and review ID for each visible open
+review. `open_contradiction` carries the visible contradiction ID and remains
+independent of support or freshness. A finding's `reason` is diagnostic text;
+it does not assert that a proposition is false.
+
+For an artifact with `fields.locator` and a recorded digest, `artifact_drift`
+is emitted when the project-relative `FileKnowledgeProvider` observes changed,
+missing or unavailable bytes. Provider containment and size/UTF-8 limits still
+apply. The audit reports the observed condition and leaves the file and
+semantic state unchanged. Findings are deterministic for a validated revision
+and sorted by category and subject identifiers.
