@@ -1,16 +1,16 @@
 # Find the route to a traceable Justification MVP
 
 Label: wayfinder:map
-Status: open
+Status: resolved
 
 ## Destination
 
-A completed, reviewed local-first MVP proving an ADR can be traced to retained evidence and flagged for review when its support changes. The user subsequently instructed completion while away; the implementation contract records routine design decisions made under that authorization.
+A completed, reviewed local-first MVP for accumulating knowledge, tracing decisions and creating justified knowledge outputs. General research-output and ADR examples prove traceability to retained evidence and review after support changes. The user instructed completion while away; the implementation contract records routine design decisions made under that authorization.
 
 ## Notes
 
 - The earlier planning-only gates were superseded by the user’s instruction “Continue until complete. Going afk”. Continue the full original MVP autonomously, record agent choices accurately and preserve TDD and the model assignments. The [MVP contract](../../docs/planning/mvp-contract.md) and [design review](../../docs/implementation/mvp-contract-review.md) govern implementation.
-- Init/discovery is implemented and reviewed; the complete runtime and actual-client MCP experiment are now in progress.
+- The complete resolved runtime, CLI, multi-project MCP server and delivery examples are implemented and reviewed. Final acceptance and package/CI evidence are linked below.
 - Implementation: **gpt-5.6-luna, max** (the user's “Lunar Max”). Code review: **gpt-6-astra, medium**. Do not silently substitute models or lower their effort. Research is a separate role.
 - The user confirmed the runtime, CLI and MCP test seams. Use one behavioral test and minimum implementation per red–green cycle under the [TDD plan](../../docs/planning/tdd-plan.md); reuse that confirmation rather than asking again.
 - Before selecting or upgrading a volatile model, SDK, protocol or format dependency, check its current primary documentation, release status and actual compatibility. Record the check date, exact version/revision, evidence and limitations; newness alone is not a quality claim.
@@ -40,24 +40,19 @@ A completed, reviewed local-first MVP proving an ADR can be traced to retained e
 - [Specify the runtime, CLI and bounded MCP contract](issues/10-runtime-mcp.md): Use TypeScript on the pinned Node24 toolchain and one public executeOperation(root,request) dispatcher returning revision/data.
 - [Agree the implementation sequence and evidence required at each review](issues/12-implementation-handoff.md): Confirmed seams remain runtime, process CLI and actual MCP clients.
 
-## Remaining delivery work
+## Delivery completed
 
-- Complete Luna-max runtime/CLI/MCP red–green cycles and capture executable evidence.
-- Production multi-project schemas/calls remain to be verified; the SDK/Codex fixture compatibility experiment is complete.
-- Run independent Astra-medium code reviews, fix material findings through Luna and re-review.
-- Ship the runnable ADR example, operation/backup documentation and optional agent skill; verify packaged installation and push reviewed work.
+- [Acceptance evidence](../../docs/implementation/acceptance.md) verifies all eighteen requirements and the general knowledge/output scope.
+- [Final review](../../docs/implementation/final-review.md) records independent Astra-medium Standards/Spec review and closure of the final scope finding in `f13f01f`.
+- [Package verification](../../docs/implementation/release-verification.md) records a clean installed package, CLI and both examples.
+- [CI evidence](../../docs/implementation/ci-baseline.md) records 101 passing tests, typecheck and build on the hosted clean checkout. The implementation is pushed to the public MIT repository.
 
-Current sequence after the reviewed ADR foundation: source-change propagation,
-strict shared request validation, and deterministic recovery; then explicit
-review/conflict resolution, promotion, bounded queries and artifact audit.
-Source maintenance and recovery each begin with a public failing behavior.
-The shared-schema extraction's first rejection test preceded its runtime hook;
-later validation clauses were prepared before their tests and must be recorded
-as verification rather than historical test-first evidence.
-
-A public check on the development Mac accepted `create_kb` with ID `Shared`
-at revision 1, where `kb/Shared` and `kb/shared` had the same inode. Correct
-case-insensitive path collisions before completing scope acceptance.
+The entries below are chronological implementation records. Statements about
+an intermediate slice stopping or awaiting another operation describe that
+earlier stage, not the final delivery status. Initial scaffolding and some
+later validation clauses preceded their tests; the evidence does not present
+them as retroactive test-first work. Case-insensitive KB/UUID collisions were
+corrected before final acceptance.
 
 ## Delivery decisions recorded by the examples/documentation slice
 

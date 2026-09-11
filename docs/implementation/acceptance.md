@@ -2,15 +2,15 @@
 
 This checklist tracks the original brief's eighteen MVP requirements. It does
 not treat a declared request type, future-facing documentation or a model's
-answer as evidence that an operation works. Pending rows must be completed
-before reporting the MVP delivered.
+answer as evidence that an operation works. All eighteen requirements in the
+resolved MVP contract are verified below.
 
 | Requirement | Public verification | Status |
 | --- | --- | --- |
 | 1–4: initialization, discovery, shared and child KBs | Runtime and CLI tests with real temporary directories; one MCP server lists two configured projects and creates a child | Verified |
-| 5: OKF-compatible Markdown | Independently parsed frontmatter, pinned OKF v0.2 root index rules, navigable source links, structured support groups and provenance, scoped ownership/drift checks, readable conflict and review history | Verified, including promotion and child-index history; final promotion review pending |
+| 5: OKF-compatible Markdown | Independently parsed frontmatter, pinned OKF v0.2 root index rules, navigable source links, structured support groups and provenance, scoped ownership/drift checks, readable conflict and review history | Verified and reviewed, including promotion and child-index history |
 | 6–10: sources, claims, decisions, artifacts and provenance | File capture → retained evidence → claim → decision with acceptance basis → artifact; direct claim-to-research-output support; independent source digest and readable provenance | Verified in runtime and real MCP tests; both runnable examples pass; source-maintenance review closed |
-| 11: shared inheritance | Child visibility and rejected sibling/shared-to-child references; explicit promotion with dependency checks and conflict resolution | Verified in seven promotion fixtures, including persisted conflict gates and cache loss; final independent review pending |
+| 11: shared inheritance | Child visibility and rejected sibling/shared-to-child references; explicit promotion with dependency checks and conflict resolution | Verified in eight promotion fixtures, including persisted conflict gates, cache loss and capture scope; final Spec finding closed at `f13f01f` |
 | 12–13: why and impact | Exact upstream chain, original acceptance revision, exact affected downstream IDs after a source change | Verified and reviewed, including direct typed dependencies on evidence and sources |
 | 14–15: contradictions and review issues | Attributed conflict, explicit directional resolution, preserved history, deduplicated and subsequent review work; optional-timestamp closure retries; rejected ownerless child conflicts | Verified; both Spec corrections closed at `7ac5c22` |
 | 16: one external provider | Real project-relative UTF-8 files; content/availability transitions; path containment and bounded reads | Verified and reviewed, including lost access, restored content and a later change |
@@ -23,17 +23,17 @@ nodes, history integrity and optimistic write conflicts. These checks explain
 the limits of the result: available declared support does not verify a
 proposition or infer semantic entailment.
 
-The parent verified an isolated archive of `7ac5c22` with the pinned Node
-v24.21.0 toolchain: typecheck and all 87 tests passed. With promotion, durable
-artifact refresh and the additional real MCP lifecycle added, the full working
-tree passes typecheck and 100 tests. Both worked examples also pass. Remaining
-delivery work is final independent review, a clean packaged installation and
-hosted CI verification of the final commit.
+Final implementation `f13f01f` passes typecheck and 101 tests locally and on
+hosted Ubuntu CI. Independent Standards/Spec review is complete, with the last
+scope finding closed by a repeated public reproduction. A clean consumer
+installation of the packed build passes package import, CLI bootstrap/query
+and both installed examples. See [final review](final-review.md),
+[release verification](release-verification.md) and [hosted CI](ci-baseline.md).
 
-Delivery requires the runnable fictional ADR example, current public operation
-documentation, recovery instructions, optional agent skill, a clean package
-installation, automated checks, independent Standards/Spec review and the
-public repository update. Scheduled/remote refresh, automatic semantic
+Delivery includes the runnable general research-output and fictional ADR
+examples, current operation documentation, recovery instructions, optional
+agent skill, clean installation evidence, automated checks, independent review
+and the public repository update. Scheduled/remote refresh, automatic semantic
 interpretation, arbitrary OKF import and sentence-level anchors are outside the
 resolved MVP.
 

@@ -48,4 +48,7 @@ observed RED/GREEN evidence are recorded in
 new independent Astra review.
 
 The parent separately ran typecheck and the full suite after this correction:
-101 tests passed, with no failures. Independent re-review is pending.
+101 tests passed, with no failures. Independent Spec re-review of `f13f01f`
+closed the finding: shared/sibling captures omit child evidence without a
+commit, child access remains valid, separate evidence promotion exposes it,
+and changed capture passes. No actionable finding remains in this gate.

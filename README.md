@@ -1,7 +1,7 @@
 # Justification
 
-The MVP is in development. [Acceptance evidence](docs/implementation/acceptance.md)
-tracks what has been verified and what remains to be completed.
+The local-first MVP is implemented and reviewed. [Acceptance evidence](docs/implementation/acceptance.md)
+records the verified runtime, CLI, MCP, recovery and package checks.
 
 Justification is a local-first, vendor-neutral knowledge and justification
 system for agentic work. It helps people and agents accumulate knowledge,
