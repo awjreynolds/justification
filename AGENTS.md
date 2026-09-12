@@ -1,6 +1,6 @@
 # Working on Justification
 
-Read `CONTEXT.md` for domain language and `docs/planning/mvp-contract.md` for the implementation contract. The user instructed completion of the full MVP while away; routine design choices no longer wait on the earlier planning gates. Record agent decisions honestly in the map at `.scratch/justification-mvp/map.md`, without attributing them to the user.
+For domain work, read `CONTEXT.md`. For MVP implementation, read `docs/planning/mvp-contract.md`. The user instructed completion of the full MVP while away; routine design choices no longer wait on the earlier planning gates. Record agent decisions honestly in the map at `.scratch/justification-mvp/map.md`, without attributing them to the user.
 
 ## Implementation and review
 
